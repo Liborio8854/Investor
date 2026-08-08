@@ -87,24 +87,103 @@ function getRuleNumber(rules, key, fallback = 0) {
   return Number.isFinite(n) ? n : fallback
 }
 
-/** Position limit as ratio. Only position_limit_pct; fallback 15 %. */
-function getPositionLimit(rules) {
-  const raw = getRuleValue(rules, 'position_limit_pct', null)
-  if (raw == null) return 0.15
+/** Parse rule ratio: "0.10" or "10" → 0.10 */
+function parseRatio(raw, fallback) {
+  if (raw == null || String(raw).trim() === '') return fallback
   const n = Number(String(raw).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
-  if (!Number.isFinite(n)) return 0.15
-  // stored as 0.15 or as 15
+  if (!Number.isFinite(n)) return fallback
   return Math.abs(n) > 1 ? n / 100 : n
+}
+
+/** Position limits from inv_rules (ratios). */
+function getLimitRatios(rules) {
+  const singleFallback = getRuleValue(rules, 'position_limit_pct', null)
+  return {
+    single: parseRatio(
+      getRuleValue(rules, 'limit_single_stock', null) ?? singleFallback,
+      0.1,
+    ),
+    opportunity: parseRatio(getRuleValue(rules, 'limit_single_stock_opportunity', null), 0.15),
+    brkSoft: parseRatio(getRuleValue(rules, 'limit_brk_total', null), 0.2),
+    brkHard: parseRatio(getRuleValue(rules, 'limit_brk_hard', null), 0.25),
+    sector: parseRatio(getRuleValue(rules, 'limit_sector', null), 0.3),
+  }
 }
 
 function isBrkTicker(ticker) {
   const t = normalizeTicker(ticker)
-  return t === 'BRYN.DE' || t.startsWith('BRK') || t === 'BRK.B' || t === 'BRK-B'
+  return (
+    t === 'BRYN.DE' ||
+    t === 'BRK-B.DE' ||
+    t === 'BRK.B' ||
+    t === 'BRK-B' ||
+    t.startsWith('BRK')
+  )
 }
 
-/** Per-ticker limit: BRYN/BRK → limit_brk_total, else position_limit_pct. */
-function getTickerLimit(ticker, positionLimit, brkLimit) {
-  return isBrkTicker(ticker) ? brkLimit : positionLimit
+function isCzechAnchorTicker(ticker) {
+  const t = normalizeTicker(ticker)
+  return t === 'KOMB.PR' || t === 'CEZ.PR'
+}
+
+/**
+ * Soft/hard limits + status for prompt.
+ * BRK: soft=limit_brk_total, hard=limit_brk_hard
+ * Czech anchors (KOMB/CEZ): 15 % legacy — WATCH only, never ALERT/sell
+ * Other: soft=limit_single_stock, hard=opportunity; ALERT only if weight > 18 %
+ */
+function getPositionLimitInfo(ticker, weight, limits) {
+  const w = Number(weight) || 0
+
+  if (isCzechAnchorTicker(ticker)) {
+    const soft = 0.15
+    const hard = 0.15
+    let status = 'ok'
+    let severity = 'ok'
+    if (w > soft) {
+      status = 'LEGACY NAD LIMITEM'
+      severity = 'WATCH'
+    } else if (w >= soft * 0.9) {
+      status = 'BLÍZKO LIMITU (LEGACY)'
+    }
+    return { soft, hard, status, severity }
+  }
+
+  if (isBrkTicker(ticker)) {
+    const soft = limits.brkSoft
+    const hard = limits.brkHard
+    let status = 'ok'
+    let severity = 'ok'
+    if (w > hard) {
+      status = 'NAD HARD LIMITEM'
+      severity = 'ALERT'
+    } else if (w > soft) {
+      status = 'NAD SOFT LIMITEM'
+      severity = 'WATCH'
+    } else if (w >= soft * 0.9) {
+      status = 'BLÍZKO SOFT LIMITU'
+    }
+    return { soft, hard, status, severity }
+  }
+
+  const soft = limits.single
+  const hard = limits.opportunity
+  const alertAbove = 0.18
+  let status = 'ok'
+  let severity = 'ok'
+  if (w > alertAbove) {
+    status = 'VÝRAZNĚ NAD OPPORTUNITY'
+    severity = 'ALERT'
+  } else if (w > hard) {
+    status = 'NAD OPPORTUNITY LIMITEM'
+    severity = 'WATCH'
+  } else if (w > soft) {
+    status = 'NAD STANDARDNÍM LIMITEM'
+    severity = 'WATCH'
+  } else if (w >= soft * 0.9) {
+    status = 'BLÍZKO LIMITU'
+  }
+  return { soft, hard, status, severity }
 }
 
 /** Latest row per ticker from rows ordered by date DESC. */
@@ -272,8 +351,7 @@ function buildSystemPrompt({
   dayOfMonth,
   allocationNote,
   snoozedTickers,
-  positionLimit,
-  brkLimit,
+  limits,
   remainingMonthlyCzk,
   remainingDipCzk,
   totalEquity,
@@ -318,11 +396,8 @@ function buildSystemPrompt({
             const price = h.price ?? prices.get(ticker)?.price
             const pnl =
               price != null && h.avgPrice > 0 ? (Number(price) - h.avgPrice) / h.avgPrice : null
-            const limit = getTickerLimit(ticker, positionLimit, brkLimit)
             const weight = Number(h.weight) || 0
-            let limitStatus = 'ok'
-            if (weight > limit) limitStatus = 'PŘEKRAČUJE LIMIT'
-            else if (weight >= limit * 0.9) limitStatus = 'BLÍZKO LIMITU'
+            const info = getPositionLimitInfo(ticker, weight, limits)
             return [
               ticker,
               fmtNum(h.qty, 4),
@@ -330,8 +405,9 @@ function buildSystemPrompt({
               price != null ? fmtNum(price) : '—',
               fmtPct(pnl),
               fmtPctPlain(weight),
-              fmtPctPlain(limit),
-              limitStatus,
+              fmtPctPlain(info.soft),
+              fmtPctPlain(info.hard),
+              info.status,
             ].join(' | ')
           })
           .join('\n')
@@ -375,15 +451,31 @@ Pokud cíl = —, ticker nemá cílovou cenu — nezobrazuj vzdálenost a nedopo
 SPYI STATUS (aktuální): ${spyiStatus}
 
 AKTUÁLNÍ POZICE:
-ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | limit pozice | limit status
+ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | soft limit | hard/opp limit | limit status
 ${posBlock}
 
-Celkové equity portfolio: ${fmtCzk(totalEquity)}
-Max limit na jednu pozici (position_limit_pct): ${fmtPctPlain(positionLimit)}
-Limit BRYN.DE / BRK (limit_brk_total): ${fmtPctPlain(brkLimit)}
-Důležité: u každé pozice používej sloupec "limit pozice" a "váha portfolia" — nehardcoduj 10 %.
-ALERT na překročení limitu jen pokud váha > limit (status PŘEKRAČUJE LIMIT).
-Pozice BLÍZKO LIMITU (≥ 90 % limitu) → NEKUPUJ, ale NEalertuj jen kvůli blízkosti.
+Celkové equity portfolio: ${fmtCzk(totalEquity)} (bez Flexi Bond)
+
+LIMITY POZIC:
+- Standardní limit: ${fmtPctPlain(limits.single)} (limit_single_stock)
+- Opportunity window (BF-A v buy zóně): ${fmtPctPlain(limits.opportunity)} (limit_single_stock_opportunity)
+- BRK/BRYN.DE soft limit: ${fmtPctPlain(limits.brkSoft)} (limit_brk_total) — pouze upozornění
+- BRK/BRYN.DE hard limit: ${fmtPctPlain(limits.brkHard)} (limit_brk_hard) — rebalancovat
+- Sektorový limit: ${fmtPctPlain(limits.sector)} (limit_sector)
+- Limity se měří proti equity portfoliu (bez Flexi Bond)
+BRYN.DE a BRK-B.DE jsou BRK pozice — použij limit_brk_total a limit_brk_hard, NE standardní limit.
+Rozlišuj závažnost alertu:
+- Pozice nad SOFT limitem ale pod HARD limitem: type WATCH, ne ALERT. Zpráva: "Pozice nad soft limitem X %, hard limit Y %. Sleduj, zatím OK."
+- Pozice nad HARD limitem: type ALERT. Zpráva: "Pozice překračuje hard limit X %. Zvaž rebalancování."
+- Standardní pozice nad opportunity limitem (${fmtPctPlain(limits.opportunity)}): type ALERT jen pokud je výrazně nad (>18 %), jinak WATCH.
+Pozice BLÍZKO LIMITU (≥ 90 % soft limitu) → NEKUPUJ, ale NEalertuj jen kvůli blízkosti.
+
+ČESKÉ KOTVY (KOMB.PR, CEZ.PR):
+- Standardní limit 15 %, ALE jsou to legacy pozice — NEdoporučuj prodej ani rebalancování
+- Pravidlo: nenavyšovat podíl, pouze reinvestovat dividendy zpět do stejného titulu
+- Podíl přirozeně klesne s růstem portfolia díky měsíčnímu DCA do jiných pozic
+- Pokud KOMB.PR nebo CEZ.PR překračují limit: type WATCH (ne ALERT), zpráva: "Legacy pozice nad limitem X %. Nenavyšovat, podíl klesne přirozeně s DCA."
+- Nikdy nedoporučuj prodej KOMB.PR ani CEZ.PR kvůli překročení limitu
 
 FUNDAMENTY:
 ticker | ROIC | ROE | net margin | revenue growth
@@ -422,7 +514,8 @@ BUY message MUSÍ obsahovat:
 3) zdůvodnění: proč tento ticker a ne jiný v buy zóně
 Logika výběru BUY:
 - Pokud je více tickerů v buy zóně, preferuj ten s menší pozicí (%)
-- Pokud je pozice na limitu nebo blízko (>90 % limitu), NEKUPUJ — řekni "pozice na limitu"
+- Pokud je pozice na limitu nebo blízko (>90 % soft limitu), NEKUPUJ — řekni "pozice na limitu"
+- BF-A v buy zóně smí růst až k opportunity limitu (${fmtPctPlain(limits.opportunity)})
 - Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace)
 MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k SPYI. Pokud je spyi_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je SPYI v pauze. Pokud je spyi_status = AKTIVNÍ, MWEQ nedoporučuj.
 Priorita nákupů:
@@ -434,14 +527,15 @@ Příklad: Pokud RYAAY je 2 % od cíle a zbývá 12 000 Kč alokace:
 - Zbytek alokace (6 000 Kč) do MWEQ.DE
 - SUMMARY: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
 Pokud žádná akcie není v buy zóně, celou alokaci do MWEQ.DE (pokud SPYI PAUZA).
-WATCH: ticker se blíží k zóně (10-15 %)
-ALERT: jen pokud pozice reálně překračuje svůj limit (váha > limit ze sloupce), nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery. Nikdy nepoužívej hardcoded 10 % — ber limit ze sloupce / position_limit_pct / limit_brk_total.
-REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň
+WATCH: ticker se blíží k zóně (10-15 %); také soft-limit upozornění (BRK nad soft / standardní nad limitem ale ne hard)
+ALERT: jen hard-limit překročení (BRK > hard), standardní pozice výrazně nad opportunity (>18 %), nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery ani české kotvy (KOMB.PR, CEZ.PR). Nikdy nepoužívej hardcoded 10 % — ber limity z LIMITY POZIC.
+REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň; také při BRK nad hard limitem (ne u KOMB.PR / CEZ.PR)
 SUMMARY (povinné, vždy poslední, priority 99):
 - Krátká česká věta: co dnes koupit (value akcie první, MWEQ jako zbytek alokace)
 - Příklad: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
 - Pokud není nic ke koupi: "Dnes nekupovat — žádný ticker v buy zóně."
-Nikdy nedoporučuj prodej bez aktivního exit triggeru`
+Nikdy nedoporučuj prodej bez aktivního exit triggeru
+Nikdy nedoporučuj prodej KOMB.PR ani CEZ.PR kvůli překročení limitu`
 }
 
 function parseGeminiJson(text) {
@@ -687,13 +781,7 @@ async function loadContext(supabase) {
     fundamentals,
     allocationNote,
     snoozedTickers,
-    positionLimit: getPositionLimit(rules),
-    brkLimit: (() => {
-      const raw = getRuleValue(rules, 'limit_brk_total', '0.20')
-      const n = Number(String(raw).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
-      if (!Number.isFinite(n)) return 0.2
-      return Math.abs(n) > 1 ? n / 100 : n
-    })(),
+    limits: getLimitRatios(rules),
     remainingMonthlyCzk,
     remainingDipCzk,
     totalEquity,
@@ -739,8 +827,7 @@ export default async function handler(req, res) {
       dayOfMonth: day,
       allocationNote: ctx.allocationNote,
       snoozedTickers: ctx.snoozedTickers,
-      positionLimit: ctx.positionLimit,
-      brkLimit: ctx.brkLimit,
+      limits: ctx.limits,
       remainingMonthlyCzk: ctx.remainingMonthlyCzk,
       remainingDipCzk: ctx.remainingDipCzk,
       totalEquity: ctx.totalEquity,
