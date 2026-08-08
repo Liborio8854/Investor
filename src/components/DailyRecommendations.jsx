@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import {
   fetchActiveAlertSnoozes,
@@ -38,6 +38,7 @@ export default function DailyRecommendations() {
   const [snoozeMenuId, setSnoozeMenuId] = useState(null)
   const [snoozeBusy, setSnoozeBusy] = useState(false)
   const [toast, setToast] = useState(null)
+  const snoozeMenuRef = useRef(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -73,13 +74,37 @@ export default function DailyRecommendations() {
     return () => clearTimeout(t)
   }, [toast])
 
+  useEffect(() => {
+    if (snoozeMenuId == null) return undefined
+
+    const handlePointerDown = (e) => {
+      if (snoozeMenuRef.current && !snoozeMenuRef.current.contains(e.target)) {
+        setSnoozeMenuId(null)
+      }
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setSnoozeMenuId(null)
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [snoozeMenuId])
+
   const visibleRecs = recs.filter((rec) => {
     const type = String(rec.type || '').toUpperCase()
+    if (type === 'SUMMARY') return true
     if (type !== 'ALERT') return true
     const ticker = String(rec.ticker || '').trim().toUpperCase()
     if (!ticker) return true
     return !snoozedTickers.has(ticker)
   })
+
+  const summaryRec = visibleRecs.find((r) => String(r.type || '').toUpperCase() === 'SUMMARY')
+  const otherRecs = visibleRecs.filter((r) => String(r.type || '').toUpperCase() !== 'SUMMARY')
 
   const handleSnooze = async (rec, days) => {
     if (!user?.id || !rec?.ticker) return
@@ -112,7 +137,13 @@ export default function DailyRecommendations() {
 
       {!loading && !error && visibleRecs.length > 0 && (
         <div className="mt-3 space-y-2.5">
-          {visibleRecs.map((rec) => {
+          {summaryRec && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3">
+              <p className="text-sm font-bold leading-snug text-[#0f172a]">{summaryRec.message}</p>
+            </div>
+          )}
+
+          {otherRecs.map((rec) => {
             const key = String(rec.type || '').toLowerCase()
             const style = STYLES[key] || {
               ...FALLBACK_STYLE,
@@ -142,7 +173,7 @@ export default function DailyRecommendations() {
                       <span className="text-xs text-[#475569]">{formatPrice(rec.price)}</span>
                     )}
                     {isAlert && rec.ticker && user?.id && (
-                      <div className="relative">
+                      <div className="relative" ref={menuOpen ? snoozeMenuRef : null}>
                         <button
                           type="button"
                           disabled={snoozeBusy}

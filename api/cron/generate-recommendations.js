@@ -87,14 +87,24 @@ function getRuleNumber(rules, key, fallback = 0) {
   return Number.isFinite(n) ? n : fallback
 }
 
-/** Position limit as ratio (0.10). Accepts position_limit_pct or limit_single_stock. */
+/** Position limit as ratio. Only position_limit_pct; fallback 15 %. */
 function getPositionLimit(rules) {
-  const raw =
-    getRuleValue(rules, 'position_limit_pct', null) ?? getRuleValue(rules, 'limit_single_stock', '0.10')
+  const raw = getRuleValue(rules, 'position_limit_pct', null)
+  if (raw == null) return 0.15
   const n = Number(String(raw).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
-  if (!Number.isFinite(n)) return 0.1
-  // stored as 0.10 or as 10
+  if (!Number.isFinite(n)) return 0.15
+  // stored as 0.15 or as 15
   return Math.abs(n) > 1 ? n / 100 : n
+}
+
+function isBrkTicker(ticker) {
+  const t = normalizeTicker(ticker)
+  return t === 'BRYN.DE' || t.startsWith('BRK') || t === 'BRK.B' || t === 'BRK-B'
+}
+
+/** Per-ticker limit: BRYN/BRK → limit_brk_total, else position_limit_pct. */
+function getTickerLimit(ticker, positionLimit, brkLimit) {
+  return isBrkTicker(ticker) ? brkLimit : positionLimit
 }
 
 /** Latest row per ticker from rows ordered by date DESC. */
@@ -263,6 +273,7 @@ function buildSystemPrompt({
   allocationNote,
   snoozedTickers,
   positionLimit,
+  brkLimit,
   remainingMonthlyCzk,
   remainingDipCzk,
   totalEquity,
@@ -304,15 +315,20 @@ function buildSystemPrompt({
             const price = h.price ?? prices.get(ticker)?.price
             const pnl =
               price != null && h.avgPrice > 0 ? (Number(price) - h.avgPrice) / h.avgPrice : null
-            const nearLimit = h.weight >= positionLimit * 0.9
+            const limit = getTickerLimit(ticker, positionLimit, brkLimit)
+            const weight = Number(h.weight) || 0
+            let limitStatus = 'ok'
+            if (weight > limit) limitStatus = 'PŘEKRAČUJE LIMIT'
+            else if (weight >= limit * 0.9) limitStatus = 'BLÍZKO LIMITU'
             return [
               ticker,
               fmtNum(h.qty, 4),
               fmtNum(h.avgPrice),
               price != null ? fmtNum(price) : '—',
               fmtPct(pnl),
-              fmtPctPlain(h.weight),
-              nearLimit ? 'BLÍZKO/NA LIMITU' : 'ok',
+              fmtPctPlain(weight),
+              fmtPctPlain(limit),
+              limitStatus,
             ].join(' | ')
           })
           .join('\n')
@@ -351,12 +367,15 @@ ticker | název | BF rating | cíl | aktuální cena | vzdálenost od cíle | m�
 ${watchBlock}
 
 AKTUÁLNÍ POZICE:
-ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | limit status
+ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | limit pozice | limit status
 ${posBlock}
 
 Celkové equity portfolio: ${fmtCzk(totalEquity)}
-Max limit na jednu pozici: ${fmtPctPlain(positionLimit)} (position_limit_pct / limit_single_stock)
-Pozice na limitu = váha ≥ 90 % limitu → NEKUPUJ, napiš "pozice na limitu"
+Max limit na jednu pozici (position_limit_pct): ${fmtPctPlain(positionLimit)}
+Limit BRYN.DE / BRK (limit_brk_total): ${fmtPctPlain(brkLimit)}
+Důležité: u každé pozice používej sloupec "limit pozice" a "váha portfolia" — nehardcoduj 10 %.
+ALERT na překročení limitu jen pokud váha > limit (status PŘEKRAČUJE LIMIT).
+Pozice BLÍZKO LIMITU (≥ 90 % limitu) → NEKUPUJ, ale NEalertuj jen kvůli blízkosti.
 
 FUNDAMENTY:
 ticker | ROIC | ROE | net margin | revenue growth
@@ -375,16 +394,16 @@ ${exitSection}
 DNEŠNÍ DATUM: ${date}
 DEN V MĚSÍCI: ${dayOfMonth} (deadline alokace: 25.)
 
-Vygeneruj 2-5 doporučení. Každé doporučení má:
+Vygeneruj 2-5 doporučení + 1 SUMMARY na konci. Každé doporučení má:
 
-type: BUY | WATCH | EARNINGS | REBALANCE | ALERT
-ticker: symbol
-price: aktuální cena
+type: BUY | WATCH | EARNINGS | REBALANCE | ALERT | SUMMARY
+ticker: symbol (u SUMMARY vždy null)
+price: aktuální cena (u SUMMARY null)
 message: krátká česká zpráva (max 180 znaků) vysvětlující proč
-priority: 1-5 (1 = nejvyšší)
+priority: 1-5 (1 = nejvyšší); SUMMARY vždy priority 99
 
 Odpověz POUZE validním JSON polem, bez markdown, bez vysvětlení.
-Příklad: [{"type":"BUY","ticker":"RYAAY","price":59.96,"message":"Kup 2x RYAAY (~120 USD / ~3 000 Kč). Pozice 4,2 %, limit 10 %. V buy zóně 1,6 % od cíle.","priority":1}]
+Příklad: [{"type":"BUY","ticker":"RYAAY","price":59.96,"message":"Kup 2x RYAAY (~120 USD / ~3 000 Kč). Pozice 4,2 %, limit 15 %. V buy zóně 1,6 % od cíle.","priority":1},{"type":"SUMMARY","ticker":null,"price":null,"message":"Dnes kup RYAAY (2 ks za ~3 000 Kč).","priority":99}]
 
 Pravidla pro generování:
 
@@ -398,8 +417,12 @@ Logika výběru BUY:
 - Pokud je pozice na limitu nebo blízko (>90 % limitu), NEKUPUJ — řekni "pozice na limitu"
 - Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace)
 WATCH: ticker se blíží k zóně (10-15 %)
-ALERT: pozice překračuje limit, nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery.
+ALERT: jen pokud pozice reálně překračuje svůj limit (váha > limit ze sloupce), nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery. Nikdy nepoužívej hardcoded 10 % — ber limit ze sloupce / position_limit_pct / limit_brk_total.
 REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň
+SUMMARY (povinné, vždy poslední, priority 99):
+- Krátká česká věta: co dnes koupit
+- Příklad: "Dnes kup RYAAY (9 ks za ~12 500 Kč). CHKP je v zóně, ale pozice je velká — preferuj RYAAY nebo MWEQ."
+- Pokud není nic ke koupi: "Dnes nekupovat — žádný ticker v buy zóně."
 Nikdy nedoporučuj prodej bez aktivního exit triggeru`
 }
 
@@ -428,8 +451,9 @@ function parseGeminiJson(text) {
 }
 
 function normalizeRecommendations(items, date) {
-  const allowed = new Set(['BUY', 'WATCH', 'EARNINGS', 'REBALANCE', 'ALERT'])
-  const out = []
+  const allowed = new Set(['BUY', 'WATCH', 'EARNINGS', 'REBALANCE', 'ALERT', 'SUMMARY'])
+  const regular = []
+  let summary = null
 
   for (const item of items || []) {
     if (!item || typeof item !== 'object') continue
@@ -438,18 +462,30 @@ function normalizeRecommendations(items, date) {
       .toUpperCase()
     if (!allowed.has(type)) continue
 
-    const ticker = item.ticker != null ? normalizeTicker(item.ticker) : null
-    const price = item.price != null && item.price !== '' ? Number(item.price) : null
     const message = String(item.message || '')
       .trim()
       .slice(0, 180)
+    if (!message) continue
+
+    if (type === 'SUMMARY') {
+      summary = {
+        date,
+        type: 'SUMMARY',
+        ticker: null,
+        price: null,
+        message,
+        priority: 99,
+      }
+      continue
+    }
+
+    const ticker = item.ticker != null ? normalizeTicker(item.ticker) : null
+    const price = item.price != null && item.price !== '' ? Number(item.price) : null
     let priority = Number(item.priority)
     if (!Number.isFinite(priority)) priority = 3
     priority = Math.min(5, Math.max(1, Math.round(priority)))
 
-    if (!message) continue
-
-    out.push({
+    regular.push({
       date,
       type,
       ticker: ticker || null,
@@ -459,7 +495,9 @@ function normalizeRecommendations(items, date) {
     })
   }
 
-  return out.slice(0, 5)
+  const out = regular.slice(0, 5)
+  if (summary) out.push(summary)
+  return out
 }
 
 async function callGemini(apiKey, systemPrompt, userPrompt) {
@@ -632,6 +670,12 @@ async function loadContext(supabase) {
     allocationNote,
     snoozedTickers,
     positionLimit: getPositionLimit(rules),
+    brkLimit: (() => {
+      const raw = getRuleValue(rules, 'limit_brk_total', '0.20')
+      const n = Number(String(raw).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
+      if (!Number.isFinite(n)) return 0.2
+      return Math.abs(n) > 1 ? n / 100 : n
+    })(),
     remainingMonthlyCzk,
     remainingDipCzk,
     totalEquity,
@@ -678,6 +722,7 @@ export default async function handler(req, res) {
       allocationNote: ctx.allocationNote,
       snoozedTickers: ctx.snoozedTickers,
       positionLimit: ctx.positionLimit,
+      brkLimit: ctx.brkLimit,
       remainingMonthlyCzk: ctx.remainingMonthlyCzk,
       remainingDipCzk: ctx.remainingDipCzk,
       totalEquity: ctx.totalEquity,

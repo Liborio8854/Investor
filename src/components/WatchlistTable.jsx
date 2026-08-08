@@ -29,13 +29,13 @@ export default function WatchlistTable({
 
   return (
     <div className="w-full overflow-x-auto">
-      <table className="w-full text-left text-xs">
+      <table className="w-full text-left text-[0.75rem] min-[480px]:text-xs">
         <thead>
           <tr className="text-[10px] uppercase tracking-wide text-[#94a3b8]">
             <th className="pb-2 pr-1 font-medium">Ticker</th>
             <th className="hidden pb-2 pr-1 font-medium sm:table-cell">Název</th>
             <th className="pb-2 pr-1 text-right font-medium">Cena</th>
-            <th className="hidden pb-2 pr-1 text-right font-medium min-[480px]:table-cell">Cíl</th>
+            <th className="pb-2 pr-1 text-right font-medium">Cíl</th>
             <th className="pb-2 pr-1 text-right font-medium">Vzdál.</th>
             <th className="pb-2 pl-1 font-medium" />
             {(showRemove || showRestore) && <th className="pb-2 font-medium" />}
@@ -48,7 +48,7 @@ export default function WatchlistTable({
               className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
               onClick={() => onRowClick?.(row)}
             >
-              <td className="max-w-[5.5rem] py-2 pr-1 align-top sm:max-w-none">
+              <td className="max-w-[70px] py-2 pr-1 align-top sm:max-w-none">
                 <div className="truncate font-semibold text-[#0f172a]">{row.ticker}</div>
                 <div className="text-[10px] uppercase leading-tight text-[#94a3b8]">
                   {row.displayCurrency}
@@ -63,14 +63,14 @@ export default function WatchlistTable({
               >
                 {row.name || '—'}
               </td>
-              <td className="whitespace-nowrap py-2 pr-1 text-right align-middle tabular-nums text-[10px] text-[#0f172a] min-[480px]:text-xs">
+              <td className="whitespace-nowrap py-2 pr-1 text-right align-middle tabular-nums text-[#0f172a]">
                 {fmtPrice(row.price)}
               </td>
-              <td className="hidden whitespace-nowrap py-2 pr-1 text-right align-middle tabular-nums text-[#475569] min-[480px]:table-cell">
+              <td className="whitespace-nowrap py-2 pr-1 text-right align-middle tabular-nums text-[#475569]">
                 {fmtPrice(row.target_price)}
               </td>
               <td
-                className={`whitespace-nowrap py-2 pr-1 text-right align-middle tabular-nums text-[10px] font-medium min-[480px]:text-xs ${
+                className={`whitespace-nowrap py-2 pr-1 text-right align-middle tabular-nums font-medium ${
                   row.distancePct != null && row.distancePct <= 0
                     ? 'text-[#059669]'
                     : 'text-[#475569]'
