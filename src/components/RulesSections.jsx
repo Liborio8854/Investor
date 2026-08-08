@@ -140,7 +140,7 @@ export function RulesSection({ title, rows, groups, footerRows, rulesByKey, onSa
 }
 
 export function MarketIndicators({ market }) {
-  const athPct = (Number(market.athDistance) || 0) * 100
+  const athPct = Number(market.athDistance) || 0
 
   return (
     <section className="border-t border-[#e2e8f0] pt-4">

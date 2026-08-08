@@ -121,10 +121,10 @@ export const RULE_SECTIONS = [
   },
 ]
 
-/** Mock tržní indikátory (fallback, když chybí inv_rules). */
+/** Mock tržní indikátory (fallback, když chybí inv_rules). ATH v procentních bodech. */
 export const MARKET_MOCK = {
   sp500Pe: 22.4,
-  spAthDistance: -0.032,
+  spAthDistance: -0.5,
 }
 
 export const GLOSSARY = [
@@ -294,14 +294,15 @@ export function formatRuleDisplay(value, format) {
 }
 
 /**
- * SPYI status from PE vs rules.
+ * SPYI / S&P 500 status from PE vs rules.
  * resumeCorrection stored as ratio 0.20 (= 20 % drop from ATH required).
+ * athDistance is percent points from inv_rules.sp500_vs_ath (e.g. -0.5 = -0,5 %).
  */
 export function computeSpyiStatus(spyiPe, pausePe, resumeCorrection, athDistance) {
   const pe = Number(spyiPe)
   const pause = Number(pausePe)
   const resume = Number(resumeCorrection)
-  const ath = Number(athDistance)
+  const athPct = Number(athDistance)
 
   if (!Number.isFinite(pe) || !Number.isFinite(pause)) {
     return { status: 'pause', label: '⏸️ PAUZA' }
@@ -311,7 +312,6 @@ export function computeSpyiStatus(spyiPe, pausePe, resumeCorrection, athDistance
     return { status: 'pause', label: '⏸️ PAUZA' }
   }
 
-  const athPct = Math.abs(ath) <= 1 ? ath * 100 : ath
   // 0.20 → need -20 %; also accept legacy -20 or 20
   let resumePct
   if (!Number.isFinite(resume)) {
@@ -322,17 +322,19 @@ export function computeSpyiStatus(spyiPe, pausePe, resumeCorrection, athDistance
     resumePct = -Math.abs(resume)
   }
 
-  if (athPct <= resumePct) {
+  if (Number.isFinite(athPct) && athPct <= resumePct) {
     return { status: 'active', label: '▶️ AKTIVNÍ' }
   }
 
   return { status: 'pause', label: '⏸️ PAUZA' }
 }
 
+/** athDistance = percent points (e.g. -0.5, -12.3), not a ratio. */
 export function computeLadderHint(athDistance) {
-  const athPct = Math.abs(athDistance) <= 1 ? athDistance * 100 : athDistance
-  if (athPct <= -30) return 'akce -30 %'
-  if (athPct <= -20) return 'akce -20 %'
-  if (athPct <= -10) return 'akce -10 %'
+  const athPct = Number(athDistance)
+  if (!Number.isFinite(athPct)) return 'žádná akce (práh -10 %)'
+  if (athPct <= -30) return 'akce -30 % aktivní'
+  if (athPct <= -20) return 'akce -20 % aktivní'
+  if (athPct <= -10) return 'akce -10 % aktivní'
   return 'žádná akce (práh -10 %)'
 }

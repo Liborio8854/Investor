@@ -163,11 +163,10 @@ export function useRulesData() {
       ) ?? MARKET_MOCK.sp500Pe
     const ath =
       parseRuleNumeric(getRuleValue(rulesByKey, 'sp500_vs_ath', '')) ?? MARKET_MOCK.spAthDistance
-    // sp500_vs_ath is stored as percent points (-3.2), computeSpyiStatus expects ratio or %
-    const athRatio = Math.abs(ath) > 1 ? ath / 100 : ath
+    // sp500_vs_ath is already percent points (e.g. -0.5 = -0,5 %)
     const peOver = pe > pausePe
     const storedStatus = getRuleValue(rulesByKey, 'sp500_status', getRuleValue(rulesByKey, 'spyi_status', ''))
-    const computed = computeSpyiStatus(pe, pausePe, resumeCorrection, athRatio)
+    const computed = computeSpyiStatus(pe, pausePe, resumeCorrection, ath)
     const statusLabel =
       storedStatus === 'PAUZA' || storedStatus === 'AKTIVNÍ'
         ? storedStatus === 'PAUZA'
@@ -179,8 +178,8 @@ export function useRulesData() {
       sp500Pe: pe,
       pausePe,
       peOver,
-      athDistance: athRatio,
-      ladderHint: computeLadderHint(athRatio),
+      athDistance: ath,
+      ladderHint: computeLadderHint(ath),
       sp500Status: statusLabel,
     }
   }, [rulesByKey])
