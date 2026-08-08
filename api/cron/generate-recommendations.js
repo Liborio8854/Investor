@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 
-const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash']
+const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.5-flash']
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 function getAdminClient() {
