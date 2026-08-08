@@ -145,6 +145,18 @@ export async function fetchDashboardData(userId, yearMonth = currentYearMonth())
   return { transactions, rules, tasks }
 }
 
+/** Denní Gemini doporučení pro dnešek (priority ASC). */
+export async function fetchTodayRecommendations() {
+  const today = new Date().toISOString().slice(0, 10)
+  const result = await supabase
+    .from('inv_recommendations')
+    .select('id, user_id, date, type, ticker, price, message, priority, created_at')
+    .eq('date', today)
+    .order('priority', { ascending: true })
+
+  return assertOk(result, 'inv_recommendations')
+}
+
 const WATCHLIST_SELECT =
   'id, created_at, updated_at, user_id, ticker, name, currency, status, notes, isin, target_price, target_t1, target_t2, bf_rating, mos, valuation_method'
 
