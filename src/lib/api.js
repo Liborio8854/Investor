@@ -157,6 +157,50 @@ export async function fetchTodayRecommendations() {
   return assertOk(result, 'inv_recommendations')
 }
 
+/** Aktivní snooze alertů (snoozed_until >= today). */
+export async function fetchActiveAlertSnoozes(userId) {
+  const today = new Date().toISOString().slice(0, 10)
+  let query = supabase
+    .from('inv_alert_snooze')
+    .select('id, user_id, ticker, snoozed_until, reason, created_at')
+    .gte('snoozed_until', today)
+
+  if (userId) query = query.eq('user_id', userId)
+
+  const result = await query
+  return assertOk(result, 'inv_alert_snooze')
+}
+
+/** Ztlumit ALERT pro ticker na N dní (upsert). */
+export async function upsertAlertSnooze({ userId, ticker, days, reason = 'manual' }) {
+  const t = String(ticker || '').trim().toUpperCase()
+  if (!userId) throw new Error('Chybí user_id')
+  if (!t) throw new Error('Chybí ticker')
+  const n = Number(days)
+  if (![30, 60, 90].includes(n)) throw new Error('Neplatná délka snooze')
+
+  const until = new Date()
+  until.setUTCDate(until.getUTCDate() + n)
+  const snoozed_until = until.toISOString().slice(0, 10)
+
+  const result = await supabase
+    .from('inv_alert_snooze')
+    .upsert(
+      {
+        user_id: userId,
+        ticker: t,
+        snoozed_until,
+        reason,
+      },
+      { onConflict: 'user_id,ticker' },
+    )
+    .select('id, user_id, ticker, snoozed_until, reason, created_at')
+    .single()
+
+  if (result.error) throw result.error
+  return result.data
+}
+
 const WATCHLIST_SELECT =
   'id, created_at, updated_at, user_id, ticker, name, currency, status, notes, isin, target_price, target_t1, target_t2, bf_rating, mos, valuation_method'
 

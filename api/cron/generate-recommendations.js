@@ -3,6 +3,9 @@ import { createClient } from '@supabase/supabase-js'
 const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.5-flash']
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
+/** Approximate CZK FX for portfolio weight / allocation context. */
+const DEFAULT_FX = { CZK: 1, EUR: 24.2, USD: 22.0 }
+
 function getAdminClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -55,6 +58,45 @@ function fmtPct(ratio, digits = 1) {
   return `${sign}${pct.toFixed(digits)} %`
 }
 
+function fmtPctPlain(ratio, digits = 1) {
+  if (ratio == null || !Number.isFinite(Number(ratio))) return '—'
+  return `${(Number(ratio) * 100).toFixed(digits)} %`
+}
+
+function fmtCzk(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  return `${Math.round(Number(n)).toLocaleString('cs-CZ')} Kč`
+}
+
+function toCzk(amount, currency) {
+  const cur = String(currency || 'CZK').toUpperCase()
+  const rate = DEFAULT_FX[cur] ?? 1
+  return Number(amount || 0) * rate
+}
+
+function getRuleValue(rules, key, fallback = null) {
+  const row = (rules || []).find((r) => r.key === key)
+  if (!row || row.value == null || String(row.value).trim() === '') return fallback
+  return String(row.value)
+}
+
+function getRuleNumber(rules, key, fallback = 0) {
+  const raw = getRuleValue(rules, key, null)
+  if (raw == null) return fallback
+  const n = Number(String(raw).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
+  return Number.isFinite(n) ? n : fallback
+}
+
+/** Position limit as ratio (0.10). Accepts position_limit_pct or limit_single_stock. */
+function getPositionLimit(rules) {
+  const raw =
+    getRuleValue(rules, 'position_limit_pct', null) ?? getRuleValue(rules, 'limit_single_stock', '0.10')
+  const n = Number(String(raw).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
+  if (!Number.isFinite(n)) return 0.1
+  // stored as 0.10 or as 10
+  return Math.abs(n) > 1 ? n / 100 : n
+}
+
 /** Latest row per ticker from rows ordered by date DESC. */
 function latestByTicker(rows) {
   const map = new Map()
@@ -84,9 +126,12 @@ function computeHoldings(transactions) {
 
     const qty = Number(tx.quantity) || 0
     const price = Number(tx.price) || 0
-    if (!map.has(ticker)) map.set(ticker, { qty: 0, cost: 0 })
+    const currency = String(tx.currency || 'CZK').toUpperCase()
+    if (!map.has(ticker)) map.set(ticker, { qty: 0, cost: 0, currency })
 
     const pos = map.get(ticker)
+    if (tx.currency) pos.currency = currency
+
     if (type === 'BUY') {
       pos.qty += qty
       pos.cost += price * qty
@@ -103,12 +148,126 @@ function computeHoldings(transactions) {
     out.set(ticker, {
       qty: pos.qty,
       avgPrice: pos.qty > 0 ? pos.cost / pos.qty : 0,
+      currency: pos.currency || 'CZK',
     })
   }
   return out
 }
 
-function buildSystemPrompt({ rules, watchlist, prices, holdings, fundamentals, date, dayOfMonth, allocationNote }) {
+function enrichHoldings(holdings, prices, watchlistByTicker) {
+  let totalEquity = 0
+  const enriched = new Map()
+
+  for (const [ticker, h] of holdings) {
+    const price = prices.get(ticker)?.price
+    const wl = watchlistByTicker.get(ticker)
+    const currency = wl?.currency || h.currency || 'CZK'
+    const valueCzk =
+      price != null ? toCzk(Number(price) * h.qty, currency) : 0
+    enriched.set(ticker, { ...h, currency, price, valueCzk })
+    totalEquity += valueCzk
+  }
+
+  for (const [ticker, h] of enriched) {
+    h.weight = totalEquity > 0 ? h.valueCzk / totalEquity : 0
+    enriched.set(ticker, h)
+  }
+
+  return { holdings: enriched, totalEquity }
+}
+
+function sumBuysCzk(transactions, predicate) {
+  let sum = 0
+  for (const tx of transactions || []) {
+    if (String(tx.type || '').toUpperCase() !== 'BUY') continue
+    if (!predicate(tx)) continue
+    sum += toCzk(Number(tx.price) * Number(tx.quantity), tx.currency)
+  }
+  return sum
+}
+
+function getExitCheckState(now = new Date()) {
+  const month = now.getUTCMonth() + 1
+  const day = now.getUTCDate()
+  const year = now.getUTCFullYear()
+  const isExitCheckMonth = [1, 4, 7, 10].includes(month) && day <= 7
+
+  const names = { 1: 'leden', 4: 'duben', 7: 'červenec', 10: 'říjen' }
+  const exitMonths = [1, 4, 7, 10]
+
+  if (isExitCheckMonth) {
+    return { isExitCheckMonth: true, nextLabel: null }
+  }
+
+  for (const y of [year, year + 1]) {
+    for (const m of exitMonths) {
+      if (y === year && m < month) continue
+      if (y === year && m === month) continue // minulé okno (den > 7)
+      return { isExitCheckMonth: false, nextLabel: `${names[m]} ${y}` }
+    }
+  }
+
+  return { isExitCheckMonth: false, nextLabel: `leden ${year + 1}` }
+}
+
+function buildExitSection({ isExitCheckMonth, nextLabel, fundamentals, rules, holdings }) {
+  if (!isExitCheckMonth) {
+    return `EXIT TRIGGERY:
+Exit triggery se nekontrolují — příští kontrola: ${nextLabel}`
+  }
+
+  const exitRules = [
+    `exit_roic_min: ${getRuleValue(rules, 'exit_roic_min', '0.12')}`,
+    `exit_roe_min: ${getRuleValue(rules, 'exit_roe_min', '0.12')}`,
+    `exit_signals_required: ${getRuleValue(rules, 'exit_signals_required', '2 ze 3')}`,
+    `exit_roic_years: ${getRuleValue(rules, 'exit_roic_years', '2')}`,
+    `exit_margin_years: ${getRuleValue(rules, 'exit_margin_years', '3')}`,
+    `exit_revenue_years: ${getRuleValue(rules, 'exit_revenue_years', '3')}`,
+    `csg_stop_loss: ${getRuleValue(rules, 'csg_stop_loss', '12')}`,
+  ].join('\n')
+
+  const lines = []
+  for (const ticker of [...holdings.keys()].sort()) {
+    const f = fundamentals.get(ticker)
+    if (!f) continue
+    lines.push(
+      [
+        ticker,
+        f.roic != null ? fmtPct(f.roic) : '—',
+        f.roe != null ? fmtPct(f.roe) : '—',
+        f.net_margin != null ? fmtPct(f.net_margin) : '—',
+        f.revenue_growth != null ? fmtPct(f.revenue_growth) : '—',
+      ].join(' | '),
+    )
+  }
+
+  return `EXIT CHECK (kvartální — po earnings season):
+Pravidla:
+${exitRules}
+
+Fundamenty držených pozic:
+ticker | ROIC | ROE | net margin | revenue growth
+${lines.length ? lines.join('\n') : '(žádné fundamenty)'}
+
+Vyhodnoť exit triggery. ALERT jen při aktivním exit signálu (2 ze 3). Nikdy nedoporučuj prodej bez aktivního exit triggeru.`
+}
+
+function buildSystemPrompt({
+  rules,
+  watchlist,
+  prices,
+  holdings,
+  fundamentals,
+  date,
+  dayOfMonth,
+  allocationNote,
+  snoozedTickers,
+  positionLimit,
+  remainingMonthlyCzk,
+  remainingDipCzk,
+  totalEquity,
+  exitSection,
+}) {
   const rulesBlock =
     rules.length > 0
       ? rules.map((r) => `${r.key}: ${r.value}`).join('\n')
@@ -142,15 +301,18 @@ function buildSystemPrompt({ rules, watchlist, prices, holdings, fundamentals, d
     holdings.size > 0
       ? [...holdings.entries()]
           .map(([ticker, h]) => {
-            const price = prices.get(ticker)?.price
+            const price = h.price ?? prices.get(ticker)?.price
             const pnl =
               price != null && h.avgPrice > 0 ? (Number(price) - h.avgPrice) / h.avgPrice : null
+            const nearLimit = h.weight >= positionLimit * 0.9
             return [
               ticker,
               fmtNum(h.qty, 4),
               fmtNum(h.avgPrice),
               price != null ? fmtNum(price) : '—',
               fmtPct(pnl),
+              fmtPctPlain(h.weight),
+              nearLimit ? 'BLÍZKO/NA LIMITU' : 'ok',
             ].join(' | ')
           })
           .join('\n')
@@ -176,6 +338,9 @@ function buildSystemPrompt({ rules, watchlist, prices, holdings, fundamentals, d
   }
   const fundBlock = fundLines.length > 0 ? fundLines.join('\n') : '(žádné fundamenty)'
 
+  const snoozeList =
+    snoozedTickers.length > 0 ? snoozedTickers.join(', ') : '(žádné)'
+
   return `Jsi investiční poradce pro českou value investing strategii. Generuješ denní doporučení.
 
 PRAVIDLA (aktuální):
@@ -186,15 +351,26 @@ ticker | název | BF rating | cíl | aktuální cena | vzdálenost od cíle | m�
 ${watchBlock}
 
 AKTUÁLNÍ POZICE:
-ticker | počet ks | průměrná cena | aktuální cena | P&L %
+ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | limit status
 ${posBlock}
+
+Celkové equity portfolio: ${fmtCzk(totalEquity)}
+Max limit na jednu pozici: ${fmtPctPlain(positionLimit)} (position_limit_pct / limit_single_stock)
+Pozice na limitu = váha ≥ 90 % limitu → NEKUPUJ, napiš "pozice na limitu"
 
 FUNDAMENTY:
 ticker | ROIC | ROE | net margin | revenue growth
 ${fundBlock}
 
-ALOKACE TENTO MĚSÍC:
+ALOKACE:
 ${allocationNote}
+Zbývající měsíční alokace (XTB): ${fmtCzk(remainingMonthlyCzk)}
+Zbývající DIP alokace (rok): ${fmtCzk(remainingDipCzk)}
+
+ZTLUMENÉ TICKERY (nealertovat): ${snoozeList}
+Tyto tickery přeskoč v ALERT doporučeních (BUY/WATCH stále může).
+
+${exitSection}
 
 DNEŠNÍ DATUM: ${date}
 DEN V MĚSÍCI: ${dayOfMonth} (deadline alokace: 25.)
@@ -204,17 +380,25 @@ Vygeneruj 2-5 doporučení. Každé doporučení má:
 type: BUY | WATCH | EARNINGS | REBALANCE | ALERT
 ticker: symbol
 price: aktuální cena
-message: krátká česká zpráva (max 100 znaků) vysvětlující proč
+message: krátká česká zpráva (max 180 znaků) vysvětlující proč
 priority: 1-5 (1 = nejvyšší)
 
 Odpověz POUZE validním JSON polem, bez markdown, bez vysvětlení.
-Příklad: [{"type":"BUY","ticker":"RYAAY","price":59.96,"message":"V buy zóně — 1,6 % od cíle, BF-A","priority":1}]
+Příklad: [{"type":"BUY","ticker":"RYAAY","price":59.96,"message":"Kup 2x RYAAY (~120 USD / ~3 000 Kč). Pozice 4,2 %, limit 10 %. V buy zóně 1,6 % od cíle.","priority":1}]
 
 Pravidla pro generování:
 
-BUY: ticker je v buy zóně (vzdálenost < 5 %) nebo těsně nad ní (< 10 % a BF-A)
+BUY: ticker je v buy zóně (vzdálenost od cíle < 5 %) nebo těsně nad ní (< 10 % a BF-A).
+BUY message MUSÍ obsahovat:
+1) konkrétní počet kusů k nákupu
+2) přibližnou částku v původní měně i v Kč
+3) zdůvodnění: proč tento ticker a ne jiný v buy zóně
+Logika výběru BUY:
+- Pokud je více tickerů v buy zóně, preferuj ten s menší pozicí (%)
+- Pokud je pozice na limitu nebo blízko (>90 % limitu), NEKUPUJ — řekni "pozice na limitu"
+- Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace)
 WATCH: ticker se blíží k zóně (10-15 %)
-ALERT: pozice překračuje limit, nebo exit trigger aktivní
+ALERT: pozice překračuje limit, nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery.
 REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň
 Nikdy nedoporučuj prodej bez aktivního exit triggeru`
 }
@@ -258,7 +442,7 @@ function normalizeRecommendations(items, date) {
     const price = item.price != null && item.price !== '' ? Number(item.price) : null
     const message = String(item.message || '')
       .trim()
-      .slice(0, 100)
+      .slice(0, 180)
     let priority = Number(item.priority)
     if (!Number.isFinite(priority)) priority = 3
     priority = Math.min(5, Math.max(1, Math.round(priority)))
@@ -316,6 +500,7 @@ async function callGemini(apiKey, systemPrompt, userPrompt) {
 }
 
 async function loadContext(supabase) {
+  const date = todayISO()
   const [
     rulesRes,
     watchRes,
@@ -323,6 +508,7 @@ async function loadContext(supabase) {
     txRes,
     fundRes,
     usersRes,
+    snoozeRes,
   ] = await Promise.all([
     supabase.from('inv_rules').select('key, value').order('key'),
     supabase
@@ -333,13 +519,17 @@ async function loadContext(supabase) {
     supabase.from('inv_prices').select('ticker, date, price').order('date', { ascending: false }),
     supabase
       .from('inv_transactions')
-      .select('ticker, type, quantity, price, date, created_at')
+      .select('ticker, type, quantity, price, date, created_at, currency, account')
       .order('date', { ascending: true }),
     supabase
       .from('inv_fundamentals')
       .select('ticker, date, roic, roe, net_margin, revenue_growth')
       .order('date', { ascending: false }),
     supabase.from('inv_users').select('id').order('id', { ascending: true }).limit(1),
+    supabase
+      .from('inv_alert_snooze')
+      .select('ticker, snoozed_until, user_id')
+      .gte('snoozed_until', date),
   ])
 
   for (const [label, res] of [
@@ -353,10 +543,15 @@ async function loadContext(supabase) {
     if (res.error) throw new Error(`${label}: ${res.error.message}`)
   }
 
+  if (snoozeRes.error) {
+    console.warn('[cron/generate-recommendations] snooze', snoozeRes.error.message)
+  }
+
   const userId = usersRes.data?.[0]?.id || null
   if (!userId) throw new Error('No user found in inv_users')
 
   const ym = yearMonthUTC()
+  const year = new Date().getUTCFullYear()
   const tasksRes = await supabase
     .from('inv_monthly_tasks')
     .select('id, completed, cancelled, task_type, title, amount')
@@ -376,14 +571,72 @@ async function loadContext(supabase) {
         ? 'Všechny měsíční úkoly dokončeny — alokace splněna.'
         : `Nesplněno: ${openTasks.length} otevřených úkolů (${openTasks.map((t) => t.title || t.task_type).join(', ')}).`
 
+  const rules = rulesRes.data || []
+  const transactions = txRes.data || []
+  const watchlist = watchRes.data || []
+  const prices = latestByTicker(pricesRes.data)
+  const rawHoldings = computeHoldings(transactions)
+
+  const watchlistByTicker = new Map(
+    watchlist.map((w) => [normalizeTicker(w.ticker), w]),
+  )
+  const { holdings, totalEquity } = enrichHoldings(rawHoldings, prices, watchlistByTicker)
+
+  const monthlyTarget = getRuleNumber(rules, 'monthly_xtb', 21000)
+  const monthlyInvested = sumBuysCzk(
+    transactions,
+    (tx) =>
+      String(tx.account || '').toLowerCase() === 'xtb' &&
+      String(tx.date || '').startsWith(ym),
+  )
+  const remainingMonthlyCzk = Math.max(0, monthlyTarget - monthlyInvested)
+
+  const dipTarget = getRuleNumber(
+    rules,
+    `dip_year_target_${year}`,
+    getRuleNumber(rules, 'dip_year_target_2026', 96000),
+  )
+  const dipInvested = sumBuysCzk(
+    transactions,
+    (tx) =>
+      String(tx.account || '').toLowerCase() === 'dip' &&
+      String(tx.date || '').startsWith(String(year)),
+  )
+  const remainingDipCzk = Math.max(0, dipTarget - dipInvested)
+
+  const snoozedTickers = [
+    ...new Set(
+      (snoozeRes.data || [])
+        .filter((s) => !s.user_id || s.user_id === userId)
+        .map((s) => normalizeTicker(s.ticker))
+        .filter(Boolean),
+    ),
+  ].sort()
+
+  const exitState = getExitCheckState()
+  const fundamentals = latestByTicker(fundRes.data)
+  const exitSection = buildExitSection({
+    ...exitState,
+    fundamentals,
+    rules,
+    holdings,
+  })
+
   return {
     userId,
-    rules: rulesRes.data || [],
-    watchlist: watchRes.data || [],
-    prices: latestByTicker(pricesRes.data),
-    holdings: computeHoldings(txRes.data),
-    fundamentals: latestByTicker(fundRes.data),
+    rules,
+    watchlist,
+    prices,
+    holdings,
+    fundamentals,
     allocationNote,
+    snoozedTickers,
+    positionLimit: getPositionLimit(rules),
+    remainingMonthlyCzk,
+    remainingDipCzk,
+    totalEquity,
+    exitSection,
+    isExitCheckMonth: exitState.isExitCheckMonth,
   }
 }
 
@@ -423,13 +676,19 @@ export default async function handler(req, res) {
       date,
       dayOfMonth: day,
       allocationNote: ctx.allocationNote,
+      snoozedTickers: ctx.snoozedTickers,
+      positionLimit: ctx.positionLimit,
+      remainingMonthlyCzk: ctx.remainingMonthlyCzk,
+      remainingDipCzk: ctx.remainingDipCzk,
+      totalEquity: ctx.totalEquity,
+      exitSection: ctx.exitSection,
     })
 
     const userPrompt =
       'Vygeneruj dnešní doporučení podle system instrukcí. Odpověz pouze JSON polem.'
 
     console.log(
-      `[cron/generate-recommendations] watchlist=${ctx.watchlist.length} holdings=${ctx.holdings.size} rules=${ctx.rules.length}`,
+      `[cron/generate-recommendations] watchlist=${ctx.watchlist.length} holdings=${ctx.holdings.size} rules=${ctx.rules.length} snoozed=${ctx.snoozedTickers.length} exitCheck=${ctx.isExitCheckMonth}`,
     )
 
     const { model, text } = await callGemini(apiKey, systemPrompt, userPrompt)
@@ -449,10 +708,13 @@ export default async function handler(req, res) {
       })
     }
 
-    const recommendations = normalizeRecommendations(parsed, date).map((r) => ({
-      ...r,
-      user_id: ctx.userId,
-    }))
+    const snoozedSet = new Set(ctx.snoozedTickers)
+    let recommendations = normalizeRecommendations(parsed, date)
+      .filter((r) => !(r.type === 'ALERT' && r.ticker && snoozedSet.has(r.ticker)))
+      .map((r) => ({
+        ...r,
+        user_id: ctx.userId,
+      }))
 
     if (!recommendations.length) {
       return res.status(502).json({
@@ -475,6 +737,8 @@ export default async function handler(req, res) {
       date,
       recommendations: recommendations.length,
       model,
+      exitCheck: ctx.isExitCheckMonth,
+      snoozed: ctx.snoozedTickers.length,
       ms: Date.now() - started,
     }
     console.log('[cron/generate-recommendations] done', result)
