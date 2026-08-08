@@ -425,12 +425,21 @@ Logika výběru BUY:
 - Pokud je pozice na limitu nebo blízko (>90 % limitu), NEKUPUJ — řekni "pozice na limitu"
 - Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace)
 MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k SPYI. Pokud je spyi_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je SPYI v pauze. Pokud je spyi_status = AKTIVNÍ, MWEQ nedoporučuj.
+Priorita nákupů:
+1. Nejdřív value akcie v buy zóně (vzdálenost od cíle < 5 %) — to jsou příležitosti, které nemusí trvat
+2. Až pak MWEQ.DE jako doplnění zbývající alokace
+3. MWEQ.DE nikdy nemá přednost před value akcií v buy zóně
+Příklad: Pokud RYAAY je 2 % od cíle a zbývá 12 000 Kč alokace:
+- Doporuč nejdřív RYAAY (např. 5 ks za ~6 000 Kč)
+- Zbytek alokace (6 000 Kč) do MWEQ.DE
+- SUMMARY: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
+Pokud žádná akcie není v buy zóně, celou alokaci do MWEQ.DE (pokud SPYI PAUZA).
 WATCH: ticker se blíží k zóně (10-15 %)
 ALERT: jen pokud pozice reálně překračuje svůj limit (váha > limit ze sloupce), nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery. Nikdy nepoužívej hardcoded 10 % — ber limit ze sloupce / position_limit_pct / limit_brk_total.
 REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň
 SUMMARY (povinné, vždy poslední, priority 99):
-- Krátká česká věta: co dnes koupit
-- Příklad: "Dnes kup RYAAY (9 ks za ~12 500 Kč). CHKP je v zóně, ale pozice je velká — preferuj RYAAY nebo MWEQ."
+- Krátká česká věta: co dnes koupit (value akcie první, MWEQ jako zbytek alokace)
+- Příklad: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
 - Pokud není nic ke koupi: "Dnes nekupovat — žádný ticker v buy zóně."
 Nikdy nedoporučuj prodej bez aktivního exit triggeru`
 }
