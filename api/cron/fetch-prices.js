@@ -1,4 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
+import YahooFinance from 'yahoo-finance2'
+
+// yahoo-finance2 v3+ requires instantiation (default export is the class)
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 
 function getAdminClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -43,102 +47,40 @@ async function collectTickers(supabase) {
   return [...set].sort()
 }
 
-async function fmpFetch(path, params, apiKey) {
-  const url = new URL(`https://financialmodelingprep.com/stable/${path}`)
-  for (const [k, v] of Object.entries(params)) {
-    if (v != null && v !== '') url.searchParams.set(k, String(v))
-  }
-  url.searchParams.set('apikey', apiKey)
-
-  const res = await fetch(url.toString(), {
-    headers: { apikey: apiKey },
-  })
-  const text = await res.text()
-  let data
-  try {
-    data = JSON.parse(text)
-  } catch {
-    throw new Error(`FMP ${path} invalid JSON (${res.status}): ${text.slice(0, 200)}`)
-  }
-
-  if (!res.ok) {
-    throw new Error(`FMP ${path} HTTP ${res.status}: ${text.slice(0, 200)}`)
-  }
-  if (data?.['Error Message'] || data?.['ErrorMessage'] || data?.error) {
-    throw new Error(
-      data['Error Message'] || data['ErrorMessage'] || data.error || `FMP ${path} error`,
-    )
-  }
-  return data
-}
-
-function firstItem(data, path) {
-  if (!Array.isArray(data) || !data[0]) {
-    throw new Error(`FMP ${path} empty or unexpected payload`)
-  }
-  return data[0]
-}
-
-/** Single-ticker quote; falls back to quote-short on free-plan / endpoint failure. */
-async function fetchQuote(ticker, apiKey, stats) {
-  try {
-    const data = await fmpFetch('quote', { symbol: ticker }, apiKey)
-    stats.ok += 1
-    return firstItem(data, 'quote')
-  } catch (quoteErr) {
-    stats.failed += 1
-    try {
-      const data = await fmpFetch('quote-short', { symbol: ticker }, apiKey)
-      stats.ok += 1
-      return firstItem(data, 'quote-short')
-    } catch (shortErr) {
-      stats.failed += 1
-      throw new Error(
-        `quote: ${quoteErr.message}; quote-short: ${shortErr.message}`,
-      )
-    }
-  }
-}
-
-async function fetchKeyMetricsTtm(ticker, apiKey, stats) {
-  try {
-    const data = await fmpFetch('key-metrics-ttm', { symbol: ticker }, apiKey)
-    stats.ok += 1
-    if (!Array.isArray(data) || !data[0]) return null
-    return data[0]
-  } catch (err) {
-    stats.failed += 1
-    throw err
-  }
-}
-
-function mapQuoteRow(q, date, fallbackTicker) {
-  const ticker = String(q.symbol || fallbackTicker || '')
-    .trim()
-    .toUpperCase()
-  if (!ticker) return null
+function mapQuoteRow(ticker, quote, date) {
+  if (!quote || quote.regularMarketPrice == null) return null
   return {
     ticker,
     date,
-    price: q.price ?? null,
-    change_percent: q.changePercentage ?? q.changesPercentage ?? q.change ?? null,
-    market_cap: q.marketCap ?? null,
-    pe_ratio: q.pe ?? q.peRatioTTM ?? null,
-    volume: q.volume ?? null,
+    price: quote.regularMarketPrice ?? null,
+    change_percent: quote.regularMarketChangePercent ?? null,
+    market_cap: quote.marketCap ?? null,
+    pe_ratio: quote.trailingPE ?? null,
+    volume: quote.regularMarketVolume ?? null,
     updated_at: new Date().toISOString(),
   }
 }
 
-function mapFundamentalsRow(ticker, m, date) {
+function calcFcfPerShare(financialData, keyStats) {
+  const fcf = financialData?.freeCashflow
+  const shares = keyStats?.sharesOutstanding
+  if (fcf == null || shares == null || shares === 0) return null
+  return fcf / shares
+}
+
+function mapFundamentalsRow(ticker, stats, date) {
+  const fd = stats?.financialData
+  const ks = stats?.defaultKeyStatistics
   return {
     ticker,
     date,
-    roic: m.returnOnCapitalEmployedTTM ?? m.roicTTM ?? null,
-    roe: m.returnOnEquityTTM ?? null,
-    net_margin: m.netProfitMarginTTM ?? null,
-    gross_margin: m.grossProfitMarginTTM ?? null,
-    revenue_growth: m.revenueGrowthTTM ?? null,
-    fcf_per_share: m.freeCashFlowPerShareTTM ?? null,
+    // Yahoo nemá ROIC přímo — returnOnAssets jako proxy
+    roic: fd?.returnOnAssets ?? null,
+    roe: fd?.returnOnEquity ?? null,
+    net_margin: fd?.profitMargins ?? null,
+    gross_margin: fd?.grossMargins ?? null,
+    revenue_growth: fd?.revenueGrowth ?? null,
+    fcf_per_share: calcFcfPerShare(fd, ks),
     updated_at: new Date().toISOString(),
   }
 }
@@ -156,18 +98,13 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
 
-  const fmpKey = process.env.FMP_API_KEY
-  if (!fmpKey) {
-    return res.status(500).json({ error: 'Missing FMP_API_KEY' })
-  }
-
   const started = Date.now()
   const date = todayISO()
   const fetchFundamentals = isMondayUTC()
   const errors = []
   let pricesUpserted = 0
   let fundamentalsUpserted = 0
-  const fmpStats = { ok: 0, failed: 0 }
+  const yahooStats = { ok: 0, failed: 0 }
 
   try {
     const supabase = getAdminClient()
@@ -181,18 +118,21 @@ export default async function handler(req, res) {
         tickers: 0,
         pricesUpserted: 0,
         fundamentalsUpserted: 0,
-        fmpCallsOk: 0,
-        fmpCallsFailed: 0,
+        yahooCallsOk: 0,
+        yahooCallsFailed: 0,
         ms: Date.now() - started,
       })
     }
 
-    // One quote (or quote-short fallback) per ticker — free plan has no batch-quote
     for (const ticker of tickers) {
       try {
-        const quote = await fetchQuote(ticker, fmpKey, fmpStats)
-        const row = mapQuoteRow(quote, date, ticker)
-        if (row) {
+        const quote = await yahooFinance.quote(ticker)
+        yahooStats.ok += 1
+        const row = mapQuoteRow(ticker, quote, date)
+        if (!row) {
+          errors.push({ type: 'quote_empty', ticker })
+          console.error('[cron/fetch-prices] quote empty', ticker)
+        } else {
           const { error } = await supabase.from('inv_prices').upsert(row, {
             onConflict: 'ticker,date',
           })
@@ -204,22 +144,25 @@ export default async function handler(req, res) {
           }
         }
       } catch (err) {
+        yahooStats.failed += 1
         errors.push({ type: 'quote', ticker, error: err.message })
         console.error('[cron/fetch-prices] quote failed', ticker, err.message)
       }
-      await sleep(100)
+      await sleep(200)
     }
 
-    // Fundamentals once a week (Monday UTC) — key-metrics-ttm only
     if (fetchFundamentals) {
       for (const ticker of tickers) {
         try {
-          const metrics = await fetchKeyMetricsTtm(ticker, fmpKey, fmpStats)
-          if (!metrics) {
+          const stats = await yahooFinance.quoteSummary(ticker, {
+            modules: ['financialData', 'defaultKeyStatistics'],
+          })
+          yahooStats.ok += 1
+          if (!stats?.financialData && !stats?.defaultKeyStatistics) {
             errors.push({ type: 'fundamentals_empty', ticker })
             continue
           }
-          const row = mapFundamentalsRow(ticker, metrics, date)
+          const row = mapFundamentalsRow(ticker, stats, date)
           const { error } = await supabase.from('inv_fundamentals').upsert(row, {
             onConflict: 'ticker,date',
           })
@@ -230,10 +173,11 @@ export default async function handler(req, res) {
             fundamentalsUpserted += 1
           }
         } catch (err) {
-          errors.push({ type: 'key-metrics-ttm', ticker, error: err.message })
-          console.error('[cron/fetch-prices] key-metrics-ttm failed', ticker, err.message)
+          yahooStats.failed += 1
+          errors.push({ type: 'fundamentals', ticker, error: err.message })
+          console.error('[cron/fetch-prices] fundamentals failed', ticker, err.message)
         }
-        await sleep(100)
+        await sleep(200)
       }
     }
 
@@ -244,8 +188,8 @@ export default async function handler(req, res) {
       pricesUpserted,
       fundamentalsUpserted,
       fundamentalsRun: fetchFundamentals,
-      fmpCallsOk: fmpStats.ok,
-      fmpCallsFailed: fmpStats.failed,
+      yahooCallsOk: yahooStats.ok,
+      yahooCallsFailed: yahooStats.failed,
       errors: errors.length,
       errorSamples: errors.slice(0, 10),
       ms: Date.now() - started,
@@ -257,8 +201,8 @@ export default async function handler(req, res) {
     return res.status(500).json({
       ok: false,
       error: err.message || String(err),
-      fmpCallsOk: fmpStats.ok,
-      fmpCallsFailed: fmpStats.failed,
+      yahooCallsOk: yahooStats.ok,
+      yahooCallsFailed: yahooStats.failed,
       ms: Date.now() - started,
     })
   }

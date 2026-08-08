@@ -1,4 +1,4 @@
--- inv_prices: denní ceny (FMP quote)
+-- inv_prices: denní ceny (Yahoo Finance quote)
 CREATE TABLE IF NOT EXISTS inv_prices (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   ticker text NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS inv_prices (
 
 CREATE INDEX IF NOT EXISTS inv_prices_ticker_date_idx ON inv_prices (ticker, date DESC);
 
--- inv_fundamentals: týdenní fundamenty (FMP key-metrics-ttm)
+-- inv_fundamentals: týdenní fundamenty (Yahoo quoteSummary)
 CREATE TABLE IF NOT EXISTS inv_fundamentals (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   ticker text NOT NULL,

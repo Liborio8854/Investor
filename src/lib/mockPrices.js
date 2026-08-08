@@ -1,4 +1,4 @@
-/** Mock ceny — později nahradíme FMP API / inv_prices */
+/** Mock ceny — později nahradíme Yahoo Finance / inv_prices */
 export const MOCK_PRICES = {
   'KOMB.PR': { price: 1049, currency: 'CZK' },
   'CEZ.PR': { price: 1357, currency: 'CZK' },
