@@ -1,5 +1,19 @@
 {
+  "crons": [
+    {
+      "path": "/api/cron/fetch-prices",
+      "schedule": "15 7 * * 1-5"
+    }
+  ],
+  "functions": {
+    "api/cron/fetch-prices.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
