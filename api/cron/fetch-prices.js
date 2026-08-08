@@ -72,39 +72,56 @@ async function fmpFetch(path, params, apiKey) {
   return data
 }
 
-/** Batch quote — jeden request pro více tickerů (?symbols=A,B,C). */
-async function fetchBatchQuotes(tickers, apiKey) {
-  const data = await fmpFetch(
-    'batch-quote',
-    { symbols: tickers.join(',') },
-    apiKey,
-  )
-  if (!Array.isArray(data)) {
-    throw new Error(`FMP batch-quote unexpected payload: ${JSON.stringify(data).slice(0, 200)}`)
+function firstItem(data, path) {
+  if (!Array.isArray(data) || !data[0]) {
+    throw new Error(`FMP ${path} empty or unexpected payload`)
   }
-  return data
-}
-
-async function fetchKeyMetricsTtm(ticker, apiKey) {
-  const data = await fmpFetch('key-metrics-ttm', { symbol: ticker }, apiKey)
-  if (!Array.isArray(data) || !data[0]) return null
   return data[0]
 }
 
-async function fetchRatiosTtm(ticker, apiKey) {
-  const data = await fmpFetch('ratios-ttm', { symbol: ticker }, apiKey)
-  if (!Array.isArray(data) || !data[0]) return null
-  return data[0]
+/** Single-ticker quote; falls back to quote-short on free-plan / endpoint failure. */
+async function fetchQuote(ticker, apiKey, stats) {
+  try {
+    const data = await fmpFetch('quote', { symbol: ticker }, apiKey)
+    stats.ok += 1
+    return firstItem(data, 'quote')
+  } catch (quoteErr) {
+    stats.failed += 1
+    try {
+      const data = await fmpFetch('quote-short', { symbol: ticker }, apiKey)
+      stats.ok += 1
+      return firstItem(data, 'quote-short')
+    } catch (shortErr) {
+      stats.failed += 1
+      throw new Error(
+        `quote: ${quoteErr.message}; quote-short: ${shortErr.message}`,
+      )
+    }
+  }
 }
 
-function mapQuoteRow(q, date) {
-  const ticker = String(q.symbol || '').trim().toUpperCase()
+async function fetchKeyMetricsTtm(ticker, apiKey, stats) {
+  try {
+    const data = await fmpFetch('key-metrics-ttm', { symbol: ticker }, apiKey)
+    stats.ok += 1
+    if (!Array.isArray(data) || !data[0]) return null
+    return data[0]
+  } catch (err) {
+    stats.failed += 1
+    throw err
+  }
+}
+
+function mapQuoteRow(q, date, fallbackTicker) {
+  const ticker = String(q.symbol || fallbackTicker || '')
+    .trim()
+    .toUpperCase()
   if (!ticker) return null
   return {
     ticker,
     date,
     price: q.price ?? null,
-    change_percent: q.changePercentage ?? q.changesPercentage ?? null,
+    change_percent: q.changePercentage ?? q.changesPercentage ?? q.change ?? null,
     market_cap: q.marketCap ?? null,
     pe_ratio: q.pe ?? q.peRatioTTM ?? null,
     volume: q.volume ?? null,
@@ -112,26 +129,18 @@ function mapQuoteRow(q, date) {
   }
 }
 
-function mapFundamentalsRow(ticker, metrics, ratios, date) {
-  const m = metrics || {}
-  const r = ratios || {}
+function mapFundamentalsRow(ticker, m, date) {
   return {
     ticker,
     date,
-    roic: m.returnOnCapitalEmployedTTM ?? m.roicTTM ?? r.returnOnCapitalEmployedTTM ?? null,
-    roe: m.returnOnEquityTTM ?? r.returnOnEquityTTM ?? null,
-    net_margin: r.netProfitMarginTTM ?? m.netProfitMarginTTM ?? null,
-    gross_margin: r.grossProfitMarginTTM ?? m.grossProfitMarginTTM ?? null,
-    revenue_growth: m.revenueGrowthTTM ?? r.revenueGrowthTTM ?? null,
-    fcf_per_share: m.freeCashFlowPerShareTTM ?? r.freeCashFlowPerShareTTM ?? null,
+    roic: m.returnOnCapitalEmployedTTM ?? m.roicTTM ?? null,
+    roe: m.returnOnEquityTTM ?? null,
+    net_margin: m.netProfitMarginTTM ?? null,
+    gross_margin: m.grossProfitMarginTTM ?? null,
+    revenue_growth: m.revenueGrowthTTM ?? null,
+    fcf_per_share: m.freeCashFlowPerShareTTM ?? null,
     updated_at: new Date().toISOString(),
   }
-}
-
-function chunk(arr, size) {
-  const out = []
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
-  return out
 }
 
 function sleep(ms) {
@@ -158,7 +167,7 @@ export default async function handler(req, res) {
   const errors = []
   let pricesUpserted = 0
   let fundamentalsUpserted = 0
-  let fmpCalls = 0
+  const fmpStats = { ok: 0, failed: 0 }
 
   try {
     const supabase = getAdminClient()
@@ -172,63 +181,45 @@ export default async function handler(req, res) {
         tickers: 0,
         pricesUpserted: 0,
         fundamentalsUpserted: 0,
-        fmpCalls: 0,
+        fmpCallsOk: 0,
+        fmpCallsFailed: 0,
         ms: Date.now() - started,
       })
     }
 
-    // Batch quotes — max ~50 symbols per request (URL length / reliability)
-    for (const batch of chunk(tickers, 50)) {
+    // One quote (or quote-short fallback) per ticker — free plan has no batch-quote
+    for (const ticker of tickers) {
       try {
-        const quotes = await fetchBatchQuotes(batch, fmpKey)
-        fmpCalls += 1
-        const rows = quotes.map((q) => mapQuoteRow(q, date)).filter(Boolean)
-        if (rows.length) {
-          const { error } = await supabase.from('inv_prices').upsert(rows, {
+        const quote = await fetchQuote(ticker, fmpKey, fmpStats)
+        const row = mapQuoteRow(quote, date, ticker)
+        if (row) {
+          const { error } = await supabase.from('inv_prices').upsert(row, {
             onConflict: 'ticker,date',
           })
           if (error) {
-            errors.push({ type: 'upsert_prices', batch, error: error.message })
-            console.error('[cron/fetch-prices] upsert prices', error.message)
+            errors.push({ type: 'upsert_prices', ticker, error: error.message })
+            console.error('[cron/fetch-prices] upsert prices', ticker, error.message)
           } else {
-            pricesUpserted += rows.length
+            pricesUpserted += 1
           }
         }
       } catch (err) {
-        errors.push({ type: 'batch-quote', batch, error: err.message })
-        console.error('[cron/fetch-prices] batch-quote failed', batch.join(','), err.message)
+        errors.push({ type: 'quote', ticker, error: err.message })
+        console.error('[cron/fetch-prices] quote failed', ticker, err.message)
       }
-      await sleep(200)
+      await sleep(100)
     }
 
-    // Fundamentals once a week (Monday UTC) — key-metrics-ttm + ratios-ttm
+    // Fundamentals once a week (Monday UTC) — key-metrics-ttm only
     if (fetchFundamentals) {
       for (const ticker of tickers) {
         try {
-          let metrics = null
-          let ratios = null
-          try {
-            metrics = await fetchKeyMetricsTtm(ticker, fmpKey)
-            fmpCalls += 1
-          } catch (err) {
-            errors.push({ type: 'key-metrics-ttm', ticker, error: err.message })
-            console.error('[cron/fetch-prices] key-metrics-ttm', ticker, err.message)
-          }
-          await sleep(150)
-          try {
-            ratios = await fetchRatiosTtm(ticker, fmpKey)
-            fmpCalls += 1
-          } catch (err) {
-            errors.push({ type: 'ratios-ttm', ticker, error: err.message })
-            console.error('[cron/fetch-prices] ratios-ttm', ticker, err.message)
-          }
-
-          if (!metrics && !ratios) {
+          const metrics = await fetchKeyMetricsTtm(ticker, fmpKey, fmpStats)
+          if (!metrics) {
             errors.push({ type: 'fundamentals_empty', ticker })
             continue
           }
-
-          const row = mapFundamentalsRow(ticker, metrics, ratios, date)
+          const row = mapFundamentalsRow(ticker, metrics, date)
           const { error } = await supabase.from('inv_fundamentals').upsert(row, {
             onConflict: 'ticker,date',
           })
@@ -239,10 +230,10 @@ export default async function handler(req, res) {
             fundamentalsUpserted += 1
           }
         } catch (err) {
-          errors.push({ type: 'fundamentals', ticker, error: err.message })
-          console.error('[cron/fetch-prices] fundamentals failed', ticker, err.message)
+          errors.push({ type: 'key-metrics-ttm', ticker, error: err.message })
+          console.error('[cron/fetch-prices] key-metrics-ttm failed', ticker, err.message)
         }
-        await sleep(150)
+        await sleep(100)
       }
     }
 
@@ -253,7 +244,8 @@ export default async function handler(req, res) {
       pricesUpserted,
       fundamentalsUpserted,
       fundamentalsRun: fetchFundamentals,
-      fmpCalls,
+      fmpCallsOk: fmpStats.ok,
+      fmpCallsFailed: fmpStats.failed,
       errors: errors.length,
       errorSamples: errors.slice(0, 10),
       ms: Date.now() - started,
@@ -265,7 +257,8 @@ export default async function handler(req, res) {
     return res.status(500).json({
       ok: false,
       error: err.message || String(err),
-      fmpCalls,
+      fmpCallsOk: fmpStats.ok,
+      fmpCallsFailed: fmpStats.failed,
       ms: Date.now() - started,
     })
   }
