@@ -290,16 +290,19 @@ function buildSystemPrompt({
           .map((w) => {
             const ticker = normalizeTicker(w.ticker)
             const price = prices.get(ticker)?.price
-            const target = w.target_price != null ? Number(w.target_price) : null
+            const targetRaw = w.target_price
+            const target =
+              targetRaw != null && String(targetRaw).trim() !== '' ? Number(targetRaw) : null
+            const hasTarget = target != null && Number.isFinite(target) && target !== 0
             let dist = '—'
-            if (price != null && target != null && target !== 0) {
+            if (price != null && hasTarget) {
               dist = fmtPct((Number(price) - target) / target)
             }
             return [
               ticker,
               w.name || '—',
               w.bf_rating || '—',
-              target != null ? fmtNum(target) : '—',
+              hasTarget ? fmtNum(target) : '—',
               price != null ? fmtNum(price) : '—',
               dist,
               w.currency || '—',
@@ -357,6 +360,8 @@ function buildSystemPrompt({
   const snoozeList =
     snoozedTickers.length > 0 ? snoozedTickers.join(', ') : '(žádné)'
 
+  const spyiStatus = getRuleValue(rules, 'spyi_status', '—')
+
   return `Jsi investiční poradce pro českou value investing strategii. Generuješ denní doporučení.
 
 PRAVIDLA (aktuální):
@@ -365,6 +370,9 @@ ${rulesBlock}
 WATCHLIST (aktivní tituly):
 ticker | název | BF rating | cíl | aktuální cena | vzdálenost od cíle | měna
 ${watchBlock}
+Pokud cíl = —, ticker nemá cílovou cenu — nezobrazuj vzdálenost a nedoporučuj nákup podle vzdálenosti od cíle.
+
+SPYI STATUS (aktuální): ${spyiStatus}
 
 AKTUÁLNÍ POZICE:
 ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | limit pozice | limit status
@@ -407,7 +415,7 @@ Příklad: [{"type":"BUY","ticker":"RYAAY","price":59.96,"message":"Kup 2x RYAAY
 
 Pravidla pro generování:
 
-BUY: ticker je v buy zóně (vzdálenost od cíle < 5 %) nebo těsně nad ní (< 10 % a BF-A).
+BUY: ticker je v buy zóně (vzdálenost od cíle < 5 %) nebo těsně nad ní (< 10 % a BF-A). Neplatí pro tickery bez cíle (cíl = —).
 BUY message MUSÍ obsahovat:
 1) konkrétní počet kusů k nákupu
 2) přibližnou částku v původní měně i v Kč
@@ -416,6 +424,7 @@ Logika výběru BUY:
 - Pokud je více tickerů v buy zóně, preferuj ten s menší pozicí (%)
 - Pokud je pozice na limitu nebo blízko (>90 % limitu), NEKUPUJ — řekni "pozice na limitu"
 - Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace)
+MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k SPYI. Pokud je spyi_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je SPYI v pauze. Pokud je spyi_status = AKTIVNÍ, MWEQ nedoporučuj.
 WATCH: ticker se blíží k zóně (10-15 %)
 ALERT: jen pokud pozice reálně překračuje svůj limit (váha > limit ze sloupce), nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery. Nikdy nepoužívej hardcoded 10 % — ber limit ze sloupce / position_limit_pct / limit_brk_total.
 REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň

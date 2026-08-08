@@ -23,7 +23,6 @@ export default function Dashboard() {
     dipTarget,
     dipInvested,
     dipHistory,
-    tasks,
     transactionsCount,
   } = useDashboardData()
 
@@ -73,9 +72,7 @@ export default function Dashboard() {
         xtbAllocated={xtbAllocated}
         dipTarget={dipTarget}
         dipInvested={dipInvested}
-        xtbTasks={tasks}
         dipHistory={dipHistory}
-        onTasksChanged={reload}
       />
 
       <RealizedTrades trades={realized} totalPnl={realizedPnl} />

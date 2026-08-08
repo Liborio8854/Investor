@@ -1,13 +1,13 @@
 import { formatNum } from '../lib/format'
 
 function fmtPrice(n) {
-  if (n == null || !Number.isFinite(Number(n))) return '—'
+  if (n == null || n === '' || !Number.isFinite(Number(n))) return '–'
   return formatNum(n)
 }
 
 /** České formátování: "+3,4 %" / "-2,1 %" */
 function fmtDist(n) {
-  if (n == null || !Number.isFinite(n)) return '—'
+  if (n == null || !Number.isFinite(n)) return '–'
   const sign = n > 0 ? '+' : n < 0 ? '−' : ''
   const abs = Math.abs(n).toFixed(1).replace('.', ',')
   return `${sign}${abs} %`

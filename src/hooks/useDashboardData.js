@@ -23,7 +23,6 @@ export function useDashboardData() {
   const [error, setError] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [rules, setRules] = useState([])
-  const [tasks, setTasks] = useState([])
 
   const ym = currentYearMonth()
   const fxMap = DEFAULT_FX
@@ -36,14 +35,12 @@ export function useDashboardData() {
       if (!user?.id) {
         setTransactions([])
         setRules([])
-        setTasks([])
         return
       }
 
       const data = await fetchDashboardData(user.id, ym)
       setTransactions(data.transactions)
       setRules(data.rules)
-      setTasks(data.tasks)
     } catch (err) {
       console.error('[dashboard]', err)
       setError(err.message || 'Nepodařilo se načíst data ze Supabase')
@@ -89,11 +86,6 @@ export function useDashboardData() {
     [liborTx, fxMap],
   )
 
-  const xtbTasks = useMemo(
-    () => tasks.filter((t) => String(t.task_type || '').toLowerCase() === 'xtb'),
-    [tasks],
-  )
-
   return {
     loading,
     error,
@@ -112,7 +104,6 @@ export function useDashboardData() {
     dipTarget,
     dipInvested,
     dipHistory,
-    tasks: xtbTasks,
     transactionsCount: liborTx.length,
   }
 }

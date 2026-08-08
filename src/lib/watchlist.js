@@ -13,17 +13,22 @@ export function enrichWatchlistItem(row) {
   const mock = getMockPrice(row.ticker)
   const price = mock?.price ?? null
   const currency = mock?.currency || row.currency || 'USD'
-  const target = Number(row.target_price)
+
+  const targetRaw = row.target_price
+  const target =
+    targetRaw != null && String(targetRaw).trim() !== '' ? Number(targetRaw) : NaN
+  const hasTarget = Number.isFinite(target) && target !== 0
+
   const t1Raw = row.target_t1
   const t1 = t1Raw == null || t1Raw === '' ? NaN : Number(t1Raw)
 
   let distancePct = null
-  if (price != null && Number.isFinite(target) && target !== 0) {
+  if (price != null && hasTarget) {
     distancePct = ((price - target) / target) * 100
   }
 
-  let signal = { emoji: '⚪', label: 'Mimo zónu' }
-  if (price != null && Number.isFinite(target)) {
+  let signal = { emoji: '⚪', label: hasTarget ? 'Mimo zónu' : 'Bez cíle' }
+  if (price != null && hasTarget) {
     if (price <= target) {
       signal = { emoji: '🟢', label: 'V nákupní zóně' }
     } else if (Number.isFinite(t1) && price <= t1) {
