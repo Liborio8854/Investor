@@ -100,7 +100,7 @@ export default async function handler(req, res) {
 
   const started = Date.now()
   const date = todayISO()
-  const fetchFundamentals = isMondayUTC()
+  const fetchFundamentals = isMondayUTC() || req.query?.forceFundamentals === 'true'
   const errors = []
   let pricesUpserted = 0
   let fundamentalsUpserted = 0
