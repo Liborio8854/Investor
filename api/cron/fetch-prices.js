@@ -43,46 +43,56 @@ async function collectTickers(supabase) {
   return [...set].sort()
 }
 
-async function fetchQuotes(tickers, apiKey) {
-  // FMP supports comma-separated batch quotes
-  const url = `https://financialmodelingprep.com/api/v3/quote/${tickers.join(',')}?apikey=${apiKey}`
-  const res = await fetch(url)
+async function fmpFetch(path, params, apiKey) {
+  const url = new URL(`https://financialmodelingprep.com/stable/${path}`)
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null && v !== '') url.searchParams.set(k, String(v))
+  }
+  url.searchParams.set('apikey', apiKey)
+
+  const res = await fetch(url.toString(), {
+    headers: { apikey: apiKey },
+  })
   const text = await res.text()
   let data
   try {
     data = JSON.parse(text)
   } catch {
-    throw new Error(`FMP quote invalid JSON (${res.status}): ${text.slice(0, 200)}`)
+    throw new Error(`FMP ${path} invalid JSON (${res.status}): ${text.slice(0, 200)}`)
   }
 
   if (!res.ok) {
-    throw new Error(`FMP quote HTTP ${res.status}: ${text.slice(0, 200)}`)
+    throw new Error(`FMP ${path} HTTP ${res.status}: ${text.slice(0, 200)}`)
   }
-  if (data?.['Error Message'] || data?.error) {
-    throw new Error(data['Error Message'] || data.error || 'FMP quote error')
+  if (data?.['Error Message'] || data?.['ErrorMessage'] || data?.error) {
+    throw new Error(
+      data['Error Message'] || data['ErrorMessage'] || data.error || `FMP ${path} error`,
+    )
   }
+  return data
+}
+
+/** Batch quote — jeden request pro více tickerů (?symbols=A,B,C). */
+async function fetchBatchQuotes(tickers, apiKey) {
+  const data = await fmpFetch(
+    'batch-quote',
+    { symbols: tickers.join(',') },
+    apiKey,
+  )
   if (!Array.isArray(data)) {
-    throw new Error(`FMP quote unexpected payload: ${text.slice(0, 200)}`)
+    throw new Error(`FMP batch-quote unexpected payload: ${JSON.stringify(data).slice(0, 200)}`)
   }
   return data
 }
 
 async function fetchKeyMetricsTtm(ticker, apiKey) {
-  const url = `https://financialmodelingprep.com/api/v3/key-metrics-ttm/${encodeURIComponent(ticker)}?apikey=${apiKey}`
-  const res = await fetch(url)
-  const text = await res.text()
-  let data
-  try {
-    data = JSON.parse(text)
-  } catch {
-    throw new Error(`FMP metrics invalid JSON (${res.status}): ${text.slice(0, 200)}`)
-  }
-  if (!res.ok) {
-    throw new Error(`FMP metrics HTTP ${res.status}: ${text.slice(0, 200)}`)
-  }
-  if (data?.['Error Message'] || data?.error) {
-    throw new Error(data['Error Message'] || data.error || 'FMP metrics error')
-  }
+  const data = await fmpFetch('key-metrics-ttm', { symbol: ticker }, apiKey)
+  if (!Array.isArray(data) || !data[0]) return null
+  return data[0]
+}
+
+async function fetchRatiosTtm(ticker, apiKey) {
+  const data = await fmpFetch('ratios-ttm', { symbol: ticker }, apiKey)
   if (!Array.isArray(data) || !data[0]) return null
   return data[0]
 }
@@ -94,24 +104,26 @@ function mapQuoteRow(q, date) {
     ticker,
     date,
     price: q.price ?? null,
-    change_percent: q.changesPercentage ?? null,
+    change_percent: q.changePercentage ?? q.changesPercentage ?? null,
     market_cap: q.marketCap ?? null,
-    pe_ratio: q.pe ?? null,
+    pe_ratio: q.pe ?? q.peRatioTTM ?? null,
     volume: q.volume ?? null,
     updated_at: new Date().toISOString(),
   }
 }
 
-function mapFundamentalsRow(ticker, m, date) {
+function mapFundamentalsRow(ticker, metrics, ratios, date) {
+  const m = metrics || {}
+  const r = ratios || {}
   return {
     ticker,
     date,
-    roic: m.returnOnCapitalEmployedTTM ?? m.roicTTM ?? null,
-    roe: m.returnOnEquityTTM ?? null,
-    net_margin: m.netProfitMarginTTM ?? null,
-    gross_margin: m.grossProfitMarginTTM ?? null,
-    revenue_growth: m.revenueGrowthTTM ?? null,
-    fcf_per_share: m.freeCashFlowPerShareTTM ?? null,
+    roic: m.returnOnCapitalEmployedTTM ?? m.roicTTM ?? r.returnOnCapitalEmployedTTM ?? null,
+    roe: m.returnOnEquityTTM ?? r.returnOnEquityTTM ?? null,
+    net_margin: r.netProfitMarginTTM ?? m.netProfitMarginTTM ?? null,
+    gross_margin: r.grossProfitMarginTTM ?? m.grossProfitMarginTTM ?? null,
+    revenue_growth: m.revenueGrowthTTM ?? r.revenueGrowthTTM ?? null,
+    fcf_per_share: m.freeCashFlowPerShareTTM ?? r.freeCashFlowPerShareTTM ?? null,
     updated_at: new Date().toISOString(),
   }
 }
@@ -146,6 +158,7 @@ export default async function handler(req, res) {
   const errors = []
   let pricesUpserted = 0
   let fundamentalsUpserted = 0
+  let fmpCalls = 0
 
   try {
     const supabase = getAdminClient()
@@ -159,14 +172,16 @@ export default async function handler(req, res) {
         tickers: 0,
         pricesUpserted: 0,
         fundamentalsUpserted: 0,
+        fmpCalls: 0,
         ms: Date.now() - started,
       })
     }
 
-    // Quotes in batches
-    for (const batch of chunk(tickers, 10)) {
+    // Batch quotes — max ~50 symbols per request (URL length / reliability)
+    for (const batch of chunk(tickers, 50)) {
       try {
-        const quotes = await fetchQuotes(batch, fmpKey)
+        const quotes = await fetchBatchQuotes(batch, fmpKey)
+        fmpCalls += 1
         const rows = quotes.map((q) => mapQuoteRow(q, date)).filter(Boolean)
         if (rows.length) {
           const { error } = await supabase.from('inv_prices').upsert(rows, {
@@ -180,22 +195,40 @@ export default async function handler(req, res) {
           }
         }
       } catch (err) {
-        errors.push({ type: 'quote', batch, error: err.message })
-        console.error('[cron/fetch-prices] quote batch failed', batch.join(','), err.message)
+        errors.push({ type: 'batch-quote', batch, error: err.message })
+        console.error('[cron/fetch-prices] batch-quote failed', batch.join(','), err.message)
       }
-      await sleep(250)
+      await sleep(200)
     }
 
-    // Fundamentals once a week (Monday UTC)
+    // Fundamentals once a week (Monday UTC) — key-metrics-ttm + ratios-ttm
     if (fetchFundamentals) {
       for (const ticker of tickers) {
         try {
-          const metrics = await fetchKeyMetricsTtm(ticker, fmpKey)
-          if (!metrics) {
+          let metrics = null
+          let ratios = null
+          try {
+            metrics = await fetchKeyMetricsTtm(ticker, fmpKey)
+            fmpCalls += 1
+          } catch (err) {
+            errors.push({ type: 'key-metrics-ttm', ticker, error: err.message })
+            console.error('[cron/fetch-prices] key-metrics-ttm', ticker, err.message)
+          }
+          await sleep(150)
+          try {
+            ratios = await fetchRatiosTtm(ticker, fmpKey)
+            fmpCalls += 1
+          } catch (err) {
+            errors.push({ type: 'ratios-ttm', ticker, error: err.message })
+            console.error('[cron/fetch-prices] ratios-ttm', ticker, err.message)
+          }
+
+          if (!metrics && !ratios) {
             errors.push({ type: 'fundamentals_empty', ticker })
             continue
           }
-          const row = mapFundamentalsRow(ticker, metrics, date)
+
+          const row = mapFundamentalsRow(ticker, metrics, ratios, date)
           const { error } = await supabase.from('inv_fundamentals').upsert(row, {
             onConflict: 'ticker,date',
           })
@@ -209,7 +242,7 @@ export default async function handler(req, res) {
           errors.push({ type: 'fundamentals', ticker, error: err.message })
           console.error('[cron/fetch-prices] fundamentals failed', ticker, err.message)
         }
-        await sleep(200)
+        await sleep(150)
       }
     }
 
@@ -220,6 +253,7 @@ export default async function handler(req, res) {
       pricesUpserted,
       fundamentalsUpserted,
       fundamentalsRun: fetchFundamentals,
+      fmpCalls,
       errors: errors.length,
       errorSamples: errors.slice(0, 10),
       ms: Date.now() - started,
@@ -231,6 +265,7 @@ export default async function handler(req, res) {
     return res.status(500).json({
       ok: false,
       error: err.message || String(err),
+      fmpCalls,
       ms: Date.now() - started,
     })
   }
