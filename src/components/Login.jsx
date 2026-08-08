@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import * as authService from '../lib/authService'
 
 function mapError(error) {
   const msg = String(error?.message || '').toLowerCase()
@@ -10,12 +11,19 @@ function mapError(error) {
   if (msg.includes('password should be at least') || msg.includes('password')) {
     return 'Heslo je příliš krátké.'
   }
+  if (msg.includes('rate limit') || msg.includes('too many')) {
+    return 'Příliš mnoho pokusů. Zkuste to za chvíli.'
+  }
+  if (msg.includes('unable to validate email') || msg.includes('email')) {
+    return error?.message || 'E-mail se nepodařilo ověřit.'
+  }
   return error?.message || 'Akci se nepodařilo dokončit.'
 }
 
 export default function Login() {
   const { signIn, signUp } = useAuth()
   const [isRegistering, setIsRegistering] = useState(false)
+  const [forgotMode, setForgotMode] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -28,6 +36,11 @@ export default function Login() {
     setInfoMessage('')
     setIsSubmitting(true)
     try {
+      if (forgotMode) {
+        await authService.resetPasswordForEmail(email.trim())
+        setInfoMessage('Odkaz pro reset hesla byl odeslán na váš e-mail.')
+        return
+      }
       if (isRegistering) {
         await signUp(email.trim(), password)
         setInfoMessage('Registrace proběhla. Nyní vyčkejte na schválení přístupu.')
@@ -58,12 +71,14 @@ export default function Login() {
         >
           <div className="mb-4 text-center">
             <p className="text-lg font-semibold text-[#0f172a]">
-              {isRegistering ? 'Registrace' : 'Přihlášení'}
+              {forgotMode ? 'Obnovení hesla' : isRegistering ? 'Registrace' : 'Přihlášení'}
             </p>
             <p className="mt-1 text-sm text-[#94a3b8]">
-              {isRegistering
-                ? 'Vytvořte účet — přístup schválí administrátor.'
-                : 'Přihlaste se e-mailem a heslem.'}
+              {forgotMode
+                ? 'Zadejte e-mail a pošleme vám odkaz pro nastavení nového hesla.'
+                : isRegistering
+                  ? 'Vytvořte účet — přístup schválí administrátor.'
+                  : 'Přihlaste se e-mailem a heslem.'}
             </p>
           </div>
 
@@ -79,18 +94,20 @@ export default function Login() {
             />
           </label>
 
-          <label className="mb-4 block text-sm text-[#475569]">
-            Heslo
-            <input
-              type="password"
-              required
-              minLength={6}
-              autoComplete={isRegistering ? 'new-password' : 'current-password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-[#e2e8f0] px-3 py-2.5 text-[#0f172a] outline-none focus:border-[#2563eb]"
-            />
-          </label>
+          {!forgotMode && (
+            <label className="mb-4 block text-sm text-[#475569]">
+              Heslo
+              <input
+                type="password"
+                required
+                minLength={6}
+                autoComplete={isRegistering ? 'new-password' : 'current-password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[#e2e8f0] px-3 py-2.5 text-[#0f172a] outline-none focus:border-[#2563eb]"
+              />
+            </label>
+          )}
 
           {error && (
             <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-[#dc2626]">{error}</p>
@@ -108,21 +125,46 @@ export default function Login() {
           >
             {isSubmitting
               ? 'Počkejte…'
-              : isRegistering
-                ? 'Vytvořit účet'
-                : 'Přihlásit se'}
+              : forgotMode
+                ? 'Odeslat odkaz pro reset'
+                : isRegistering
+                  ? 'Vytvořit účet'
+                  : 'Přihlásit se'}
           </button>
+
+          {!forgotMode && !isRegistering && (
+            <button
+              type="button"
+              className="mt-3 w-full text-sm text-[#2563eb]"
+              onClick={() => {
+                setForgotMode(true)
+                setError('')
+                setInfoMessage('')
+                setPassword('')
+              }}
+            >
+              Zapomněli jste heslo?
+            </button>
+          )}
 
           <button
             type="button"
             className="mt-4 w-full text-sm text-[#2563eb]"
             onClick={() => {
-              setIsRegistering((v) => !v)
+              if (forgotMode) {
+                setForgotMode(false)
+              } else {
+                setIsRegistering((v) => !v)
+              }
               setError('')
               setInfoMessage('')
             }}
           >
-            {isRegistering ? 'Už máte účet? Přihlášení' : 'Nemáte účet? Registrace'}
+            {forgotMode
+              ? 'Zpět na přihlášení'
+              : isRegistering
+                ? 'Už máte účet? Přihlášení'
+                : 'Nemáte účet? Registrace'}
           </button>
         </form>
       </div>

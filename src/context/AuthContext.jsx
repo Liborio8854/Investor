@@ -16,6 +16,7 @@ async function ensureInvUser(sessionUser) {
   if (existing) return existing
 
   const displayName =
+    sessionUser.user_metadata?.display_name ||
     sessionUser.user_metadata?.full_name ||
     sessionUser.user_metadata?.name ||
     sessionUser.email?.split('@')[0] ||
@@ -111,6 +112,15 @@ export function AuthProvider({ children }) {
     await authService.signOut()
   }, [])
 
+  const updateDisplayName = useCallback(
+    async (newName) => {
+      if (!session?.user?.id) throw new Error('Nejste přihlášeni')
+      await authService.updateDisplayName(session.user.id, newName)
+      setInvUser((prev) => (prev ? { ...prev, display_name: String(newName).trim() } : prev))
+    },
+    [session?.user?.id],
+  )
+
   const value = useMemo(
     () => ({
       session,
@@ -122,9 +132,10 @@ export function AuthProvider({ children }) {
       signIn,
       signUp,
       signOut,
+      updateDisplayName,
       refreshInvUser: () => refreshInvUser(session),
     }),
-    [session, invUser, loading, authError, signIn, signUp, signOut, refreshInvUser],
+    [session, invUser, loading, authError, signIn, signUp, signOut, updateDisplayName, refreshInvUser],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
