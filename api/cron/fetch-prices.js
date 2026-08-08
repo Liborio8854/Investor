@@ -4,6 +4,15 @@ import YahooFinance from 'yahoo-finance2'
 // yahoo-finance2 v3+ requires instantiation (default export is the class)
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 
+/** Mapování lokálních tickerů → Yahoo symbol (+ volitelný FX přepočet ceny). */
+const TICKER_MAP = {
+  'FFX.DE': { yahoo: 'FFH.TO', convertCurrency: { from: 'CAD', to: 'EUR' } },
+}
+
+function resolveYahooSymbol(ticker) {
+  return TICKER_MAP[ticker]?.yahoo || ticker
+}
+
 function getAdminClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -85,6 +94,28 @@ function mapFundamentalsRow(ticker, stats, date) {
   }
 }
 
+/** FX kurz pro pár FROM→TO (např. CAD+EUR → CADEUR=X), cache per cron run. */
+async function getFxRate(from, to, fxCache, yahooStats) {
+  const pair = `${from}${to}=X`
+  if (fxCache.has(pair)) return fxCache.get(pair)
+
+  const fx = await yahooFinance.quote(pair)
+  yahooStats.ok += 1
+  const rate = fx?.regularMarketPrice
+  if (rate == null) {
+    throw new Error(`FX rate empty for ${pair}`)
+  }
+  fxCache.set(pair, rate)
+  return rate
+}
+
+async function applyCurrencyConversion(row, mapping, fxCache, yahooStats) {
+  const cc = mapping?.convertCurrency
+  if (!row || !cc?.from || !cc?.to) return row
+  const rate = await getFxRate(cc.from, cc.to, fxCache, yahooStats)
+  return { ...row, price: row.price * rate }
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
@@ -105,6 +136,7 @@ export default async function handler(req, res) {
   let pricesUpserted = 0
   let fundamentalsUpserted = 0
   const yahooStats = { ok: 0, failed: 0 }
+  const fxCache = new Map()
 
   try {
     const supabase = getAdminClient()
@@ -125,14 +157,25 @@ export default async function handler(req, res) {
     }
 
     for (const ticker of tickers) {
+      const mapping = TICKER_MAP[ticker]
+      const yahooSymbol = resolveYahooSymbol(ticker)
       try {
-        const quote = await yahooFinance.quote(ticker)
+        const quote = await yahooFinance.quote(yahooSymbol)
         yahooStats.ok += 1
-        const row = mapQuoteRow(ticker, quote, date)
+        let row = mapQuoteRow(ticker, quote, date)
         if (!row) {
-          errors.push({ type: 'quote_empty', ticker })
-          console.error('[cron/fetch-prices] quote empty', ticker)
+          errors.push({ type: 'quote_empty', ticker, yahooSymbol })
+          console.error('[cron/fetch-prices] quote empty', ticker, yahooSymbol)
         } else {
+          try {
+            row = await applyCurrencyConversion(row, mapping, fxCache, yahooStats)
+          } catch (fxErr) {
+            yahooStats.failed += 1
+            errors.push({ type: 'fx', ticker, error: fxErr.message })
+            console.error('[cron/fetch-prices] fx failed', ticker, fxErr.message)
+            await sleep(200)
+            continue
+          }
           const { error } = await supabase.from('inv_prices').upsert(row, {
             onConflict: 'ticker,date',
           })
@@ -145,21 +188,22 @@ export default async function handler(req, res) {
         }
       } catch (err) {
         yahooStats.failed += 1
-        errors.push({ type: 'quote', ticker, error: err.message })
-        console.error('[cron/fetch-prices] quote failed', ticker, err.message)
+        errors.push({ type: 'quote', ticker, yahooSymbol, error: err.message })
+        console.error('[cron/fetch-prices] quote failed', ticker, yahooSymbol, err.message)
       }
       await sleep(200)
     }
 
     if (fetchFundamentals) {
       for (const ticker of tickers) {
+        const yahooSymbol = resolveYahooSymbol(ticker)
         try {
-          const stats = await yahooFinance.quoteSummary(ticker, {
+          const stats = await yahooFinance.quoteSummary(yahooSymbol, {
             modules: ['financialData', 'defaultKeyStatistics'],
           })
           yahooStats.ok += 1
           if (!stats?.financialData && !stats?.defaultKeyStatistics) {
-            errors.push({ type: 'fundamentals_empty', ticker })
+            errors.push({ type: 'fundamentals_empty', ticker, yahooSymbol })
             continue
           }
           const row = mapFundamentalsRow(ticker, stats, date)
@@ -174,8 +218,8 @@ export default async function handler(req, res) {
           }
         } catch (err) {
           yahooStats.failed += 1
-          errors.push({ type: 'fundamentals', ticker, error: err.message })
-          console.error('[cron/fetch-prices] fundamentals failed', ticker, err.message)
+          errors.push({ type: 'fundamentals', ticker, yahooSymbol, error: err.message })
+          console.error('[cron/fetch-prices] fundamentals failed', ticker, yahooSymbol, err.message)
         }
         await sleep(200)
       }
@@ -190,6 +234,7 @@ export default async function handler(req, res) {
       fundamentalsRun: fetchFundamentals,
       yahooCallsOk: yahooStats.ok,
       yahooCallsFailed: yahooStats.failed,
+      fxCached: [...fxCache.keys()],
       errors: errors.length,
       errorSamples: errors.slice(0, 10),
       ms: Date.now() - started,
