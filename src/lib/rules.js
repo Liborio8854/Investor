@@ -10,13 +10,14 @@ export const RULE_SECTIONS = [
       { key: 'monthly_dip', label: 'DIP měsíčně', format: 'czk', defaultValue: '4000' },
       {
         key: 'dip_year_target_2026',
-        label: 'DIP roční cíl 2026',
+        label: 'DIP 2026',
         format: 'czk',
         defaultValue: '96000',
       },
       {
-        key: 'dip_year_target_2027',
-        label: 'DIP roční cíl 2027',
+        key: 'dip_year_target_default',
+        label: 'DIP 2027+',
+        description: 'DIP roční cíl 2027+ (Kč)',
         format: 'czk',
         defaultValue: '48000',
       },
@@ -166,6 +167,43 @@ export function getRuleValue(rulesByKey, key, defaultValue = '') {
   const row = rulesByKey[key]
   if (row?.value != null && String(row.value).trim() !== '') return String(row.value)
   return String(defaultValue ?? '')
+}
+
+/**
+ * DIP roční cíl: dip_year_target_{year} → dip_year_target_default → monthly_dip×12.
+ * rules: array [{key,value}] nebo map key→row|{value}
+ */
+export function resolveDipYearTarget(rules, year = new Date().getFullYear()) {
+  const read = (key) => {
+    if (!rules) return null
+    if (Array.isArray(rules)) {
+      const row = rules.find((r) => r.key === key)
+      if (!row || row.value == null || String(row.value).trim() === '') return null
+      return String(row.value)
+    }
+    const row = rules[key]
+    if (row == null) return null
+    const raw = typeof row === 'object' && row !== null && 'value' in row ? row.value : row
+    if (raw == null || String(raw).trim() === '') return null
+    return String(raw)
+  }
+
+  const parse = (raw) => {
+    if (raw == null) return null
+    const n = parseRuleNumeric(raw)
+    return n != null ? n : null
+  }
+
+  const specific = parse(read(`dip_year_target_${year}`))
+  if (specific != null) return specific
+
+  const def = parse(read('dip_year_target_default')) ?? parse(read('dip_year_target_2027'))
+  if (def != null) return def
+
+  const monthly = parse(read('monthly_dip'))
+  if (monthly != null) return monthly * 12
+
+  return 48000
 }
 
 export function parseRuleNumeric(value) {

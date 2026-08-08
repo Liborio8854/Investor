@@ -5,6 +5,7 @@ import {
   fetchRulesLog,
   insertRule,
   insertRulesLog,
+  renameRuleKey,
   updateRule,
 } from '../lib/api'
 import {
@@ -34,16 +35,33 @@ export function useRulesData() {
   const [log, setLog] = useState([])
 
   const ensureMissingDefaults = useCallback(async (rulesData, userId) => {
+    let next = [...rulesData]
     const byKey = {}
-    for (const row of rulesData) {
+    for (const row of next) {
       if (row.key) byKey[row.key] = row
+    }
+
+    // Legacy: dip_year_target_2027 → dip_year_target_default
+    if (byKey.dip_year_target_2027 && !byKey.dip_year_target_default) {
+      try {
+        const renamed = await renameRuleKey(
+          byKey.dip_year_target_2027.id,
+          'dip_year_target_default',
+          'DIP roční cíl 2027+ (Kč)',
+        )
+        next = next.map((r) => (r.id === renamed.id ? renamed : r))
+        delete byKey.dip_year_target_2027
+        byKey.dip_year_target_default = renamed
+      } catch (err) {
+        console.warn('[rules] rename dip_year_target_2027', err)
+      }
     }
 
     const missing = [
       ...collectRuleDefs().filter((def) => !byKey[def.key]),
       ...CRON_RULE_DEFAULTS.filter((def) => !byKey[def.key]),
     ]
-    if (!missing.length) return rulesData
+    if (!missing.length) return next
 
     const created = []
     for (const def of missing) {
@@ -52,14 +70,14 @@ export function useRulesData() {
           user_id: userId,
           key: def.key,
           value: String(def.defaultValue ?? ''),
-          description: def.label || null,
+          description: def.description || def.label || null,
         })
         created.push(row)
       } catch (err) {
         console.warn('[rules] ensure default', def.key, err)
       }
     }
-    return created.length ? [...rulesData, ...created] : rulesData
+    return created.length ? [...next, ...created] : next
   }, [])
 
   const reload = useCallback(

@@ -38,6 +38,7 @@ export default function MonthlyAllocation({
   dipTarget,
   dipInvested,
   dipHistory,
+  dipYear = new Date().getFullYear(),
 }) {
   const [dipOpen, setDipOpen] = useState(false)
 
@@ -71,7 +72,9 @@ export default function MonthlyAllocation({
           {dipOpen && (
             <ul className="mt-2 space-y-1.5">
               {dipHistory.length === 0 ? (
-                <li className="text-xs text-[#94a3b8]">Zatím žádné nákupy DIP v roce 2026</li>
+                <li className="text-xs text-[#94a3b8]">
+                  Zatím žádné nákupy DIP v roce {dipYear}
+                </li>
               ) : (
                 dipHistory.map((row) => (
                   <li

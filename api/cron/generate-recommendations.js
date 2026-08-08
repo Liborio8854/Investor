@@ -87,6 +87,28 @@ function getRuleNumber(rules, key, fallback = 0) {
   return Number.isFinite(n) ? n : fallback
 }
 
+/** DIP roční cíl: dip_year_target_{year} → dip_year_target_default → monthly_dip×12. */
+function resolveDipYearTarget(rules, year) {
+  const specific = getRuleValue(rules, `dip_year_target_${year}`, null)
+  if (specific != null) {
+    const n = Number(String(specific).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
+    if (Number.isFinite(n)) return n
+  }
+  const def =
+    getRuleValue(rules, 'dip_year_target_default', null) ??
+    getRuleValue(rules, 'dip_year_target_2027', null)
+  if (def != null) {
+    const n = Number(String(def).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
+    if (Number.isFinite(n)) return n
+  }
+  const monthly = getRuleValue(rules, 'monthly_dip', null)
+  if (monthly != null) {
+    const n = Number(String(monthly).replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, ''))
+    if (Number.isFinite(n)) return n * 12
+  }
+  return 48000
+}
+
 /** Parse rule ratio: "0.10" or "10" → 0.10 */
 function parseRatio(raw, fallback) {
   if (raw == null || String(raw).trim() === '') return fallback
@@ -658,7 +680,47 @@ async function callGemini(apiKey, systemPrompt, userPrompt) {
   throw lastError || new Error('All Gemini models failed')
 }
 
+async function migrateDipYearTargetKey(supabase) {
+  const { data: fromRows, error: fromErr } = await supabase
+    .from('inv_rules')
+    .select('id, value')
+    .eq('key', 'dip_year_target_2027')
+  if (fromErr || !fromRows?.length) return
+
+  const { data: toRows } = await supabase
+    .from('inv_rules')
+    .select('id')
+    .eq('key', 'dip_year_target_default')
+    .limit(1)
+
+  if (toRows?.length) {
+    const { error } = await supabase.from('inv_rules').delete().eq('key', 'dip_year_target_2027')
+    if (error) {
+      console.warn('[cron/generate-recommendations] migrate delete dip_year_target_2027', error.message)
+    } else {
+      console.log('[cron/generate-recommendations] dropped legacy dip_year_target_2027')
+    }
+    return
+  }
+
+  const { error } = await supabase
+    .from('inv_rules')
+    .update({
+      key: 'dip_year_target_default',
+      description: 'DIP roční cíl 2027+ (Kč)',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('key', 'dip_year_target_2027')
+  if (error) {
+    console.warn('[cron/generate-recommendations] migrate rename dip_year_target_2027', error.message)
+  } else {
+    console.log('[cron/generate-recommendations] migrated dip_year_target_2027 → dip_year_target_default')
+  }
+}
+
 async function loadContext(supabase) {
+  await migrateDipYearTargetKey(supabase)
+
   const date = todayISO()
   const [
     rulesRes,
@@ -750,11 +812,7 @@ async function loadContext(supabase) {
   )
   const remainingMonthlyCzk = Math.max(0, monthlyTarget - monthlyInvested)
 
-  const dipTarget = getRuleNumber(
-    rules,
-    `dip_year_target_${year}`,
-    getRuleNumber(rules, 'dip_year_target_2026', 96000),
-  )
+  const dipTarget = resolveDipYearTarget(rules, year)
   const dipInvested = sumBuysCzk(
     transactions,
     (tx) =>

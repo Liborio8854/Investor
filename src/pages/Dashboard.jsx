@@ -23,6 +23,7 @@ export default function Dashboard() {
     dipTarget,
     dipInvested,
     dipHistory,
+    dipYear,
     transactionsCount,
   } = useDashboardData()
 
@@ -73,6 +74,7 @@ export default function Dashboard() {
         dipTarget={dipTarget}
         dipInvested={dipInvested}
         dipHistory={dipHistory}
+        dipYear={dipYear}
       />
 
       <RealizedTrades trades={realized} totalPnl={realizedPnl} />

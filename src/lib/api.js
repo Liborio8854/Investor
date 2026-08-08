@@ -85,6 +85,21 @@ export async function updateRule(id, value) {
   return result.data
 }
 
+/** Rename rule key (e.g. dip_year_target_2027 → dip_year_target_default). */
+export async function renameRuleKey(id, newKey, description = null) {
+  const patch = { key: newKey, updated_at: new Date().toISOString() }
+  if (description != null) patch.description = description
+  const result = await supabase
+    .from('inv_rules')
+    .update(patch)
+    .eq('id', id)
+    .select('id, user_id, key, value, description, updated_at')
+    .single()
+
+  if (result.error) throw result.error
+  return result.data
+}
+
 /** Insert rule for user when missing (e.g. editing shared fallback). */
 export async function insertRule(row) {
   const result = await supabase

@@ -16,6 +16,7 @@ import {
   parseRuleNumber,
   sumRealizedPnl,
 } from '../lib/portfolio'
+import { resolveDipYearTarget } from '../lib/rules'
 
 export function useDashboardData() {
   const { user } = useAuth()
@@ -72,18 +73,19 @@ export function useDashboardData() {
   const exposure = useMemo(() => computeCurrencyExposure(positions), [positions])
 
   const xtbTarget = parseRuleNumber(rules, 'monthly_xtb', 10000)
-  const dipTarget = parseRuleNumber(rules, 'dip_year_target_2026', 120000)
+  const dipYear = new Date().getFullYear()
+  const dipTarget = resolveDipYearTarget(rules, dipYear)
   const xtbAllocated = useMemo(
     () => computeMonthlyXtbAllocated(liborTx, ym, fxMap),
     [liborTx, ym, fxMap],
   )
   const dipInvested = useMemo(
-    () => computeDipYearInvested(liborTx, 2026, fxMap),
-    [liborTx, fxMap],
+    () => computeDipYearInvested(liborTx, dipYear, fxMap),
+    [liborTx, fxMap, dipYear],
   )
   const dipHistory = useMemo(
-    () => dipBuyHistory(liborTx, 2026, fxMap),
-    [liborTx, fxMap],
+    () => dipBuyHistory(liborTx, dipYear, fxMap),
+    [liborTx, fxMap, dipYear],
   )
 
   return {
@@ -104,6 +106,7 @@ export function useDashboardData() {
     dipTarget,
     dipInvested,
     dipHistory,
+    dipYear,
     transactionsCount: liborTx.length,
   }
 }
