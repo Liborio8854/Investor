@@ -1,5 +1,7 @@
+import { useAuth } from '../context/AuthContext'
 import { useRulesData } from '../hooks/useRulesData'
 import {
+  AutoUpdatesSection,
   GlossarySection,
   MarketIndicators,
   RulesHistory,
@@ -7,6 +9,7 @@ import {
 } from '../components/RulesSections'
 
 export default function Rules() {
+  const { user } = useAuth()
   const { loading, error, reload, rulesByKey, sections, saveRule, log, market } = useRulesData()
 
   if (loading) {
@@ -45,6 +48,11 @@ export default function Rules() {
       ))}
 
       <MarketIndicators market={market} />
+      <AutoUpdatesSection
+        rulesByKey={rulesByKey}
+        userId={user?.id}
+        onRulesChanged={() => reload({ silent: true })}
+      />
       <GlossarySection />
       <RulesHistory log={log} />
     </div>

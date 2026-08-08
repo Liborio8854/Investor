@@ -82,6 +82,19 @@ export function formatDate(dateStr) {
   return d.toLocaleDateString('cs-CZ')
 }
 
+/** "8. 8. 2026, 9:15" — date-only strings use noon local to avoid TZ shift. */
+export function formatDateTime(dateStr) {
+  if (!dateStr) return '—'
+  const raw = String(dateStr)
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(`${raw}T12:00:00`)
+    : new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw
+  const date = d.toLocaleDateString('cs-CZ')
+  const time = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
+  return `${date}, ${time}`
+}
+
 export function signedCzk(value) {
   const n = Number(value) || 0
   const prefix = n > 0 ? '+' : ''

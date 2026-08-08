@@ -1,5 +1,12 @@
-import { useState } from 'react'
-import { formatDate } from '../lib/format'
+import { useCallback, useEffect, useState } from 'react'
+import { formatDate, formatDateTime } from '../lib/format'
+import {
+  fetchLastPriceUpdateAt,
+  fetchLastRecommendationsUpdateAt,
+  insertRulesLog,
+  triggerCronJob,
+  upsertRuleByKey,
+} from '../lib/api'
 import {
   GLOSSARY,
   editValueToStorage,
@@ -257,4 +264,211 @@ function formatLogValue(v) {
     return Math.round(n).toLocaleString('cs-CZ')
   }
   return String(v)
+}
+
+function isRuleActive(value) {
+  if (value == null || value === '') return true
+  return String(value).toLowerCase() !== 'false'
+}
+
+function ToggleSwitch({ checked, disabled, onChange, label }) {
+  return (
+    <label
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center ${
+        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+      }`}
+    >
+      <input
+        type="checkbox"
+        role="switch"
+        className="peer sr-only"
+        checked={checked}
+        disabled={disabled}
+        aria-label={label}
+        onChange={onChange}
+      />
+      <span
+        className={`absolute inset-0 rounded-full transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-400 peer-focus-visible:ring-offset-1 ${
+          checked ? 'bg-emerald-500' : 'bg-slate-300'
+        }`}
+      />
+      <span
+        className={`pointer-events-none absolute left-1 top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-5' : 'translate-x-0'
+        }`}
+      />
+    </label>
+  )
+}
+
+function CronUpdateRow({
+  label,
+  ruleKey,
+  lastUpdatedAt,
+  toastSuccess,
+  rulesByKey,
+  userId,
+  onRulesChanged,
+  onRefreshStamp,
+}) {
+  const rawFromProps = getRuleValue(rulesByKey, ruleKey, 'true')
+  const [isActive, setIsActive] = useState(() => isRuleActive(rawFromProps))
+  const [busyToggle, setBusyToggle] = useState(false)
+  const [busyRun, setBusyRun] = useState(false)
+  const [toast, setToast] = useState(null)
+
+  useEffect(() => {
+    setIsActive(isRuleActive(getRuleValue(rulesByKey, ruleKey, 'true')))
+  }, [rulesByKey, ruleKey])
+
+  useEffect(() => {
+    if (!toast) return undefined
+    const t = setTimeout(() => setToast(null), 3200)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  const toggleCron = async () => {
+    if (!userId || busyToggle) return
+    const next = !isActive
+    setIsActive(next)
+    setBusyToggle(true)
+    try {
+      await upsertRuleByKey({
+        userId,
+        key: ruleKey,
+        value: next ? 'true' : 'false',
+        description: label,
+      })
+      try {
+        await insertRulesLog({
+          user_id: userId,
+          rule_key: ruleKey,
+          old_value: next ? 'false' : 'true',
+          new_value: next ? 'true' : 'false',
+          reason: null,
+          changed_at: new Date().toISOString(),
+        })
+      } catch (logErr) {
+        console.warn('[rules_log]', logErr)
+      }
+      await onRulesChanged?.()
+    } catch (err) {
+      console.error('[AutoUpdates] toggle', err)
+      setIsActive(!next)
+      alert(err.message || 'Uložení selhalo')
+    } finally {
+      setBusyToggle(false)
+    }
+  }
+
+  const runNow = async () => {
+    setBusyRun(true)
+    try {
+      const job = ruleKey === 'cron_prices_active' ? 'fetch-prices' : 'generate-recommendations'
+      await triggerCronJob(job)
+      await onRefreshStamp?.()
+      setToast(toastSuccess)
+    } catch (err) {
+      console.error('[AutoUpdates]', err)
+      setToast(err.message || 'Aktualizace selhala')
+    } finally {
+      setBusyRun(false)
+    }
+  }
+
+  return (
+    <div className="border-t border-[#f1f5f9] py-2.5 first:border-t-0">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 text-sm text-[#475569]">{label}</span>
+        <span className="shrink-0 text-xs tabular-nums text-[#64748b]">
+          {formatDateTime(lastUpdatedAt)}
+        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className={`text-[10px] font-medium ${isActive ? 'text-emerald-600' : 'text-[#94a3b8]'}`}>
+            {isActive ? 'Aktivní' : 'Neaktivní'}
+          </span>
+          <ToggleSwitch
+            checked={isActive}
+            disabled={busyToggle || busyRun || !userId}
+            onChange={toggleCron}
+            label={`${label}: ${isActive ? 'aktivní' : 'neaktivní'}`}
+          />
+        </div>
+      </div>
+      <div className="mt-2">
+        <button
+          type="button"
+          disabled={busyRun}
+          onClick={runNow}
+          className="inline-flex items-center gap-1.5 rounded-md border border-[#e2e8f0] bg-white px-2.5 py-1 text-xs font-medium text-[#475569] hover:border-[#cbd5e1] hover:text-[#0f172a] disabled:opacity-50"
+        >
+          {busyRun ? (
+            <>
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#94a3b8] border-t-transparent" />
+              Aktualizuji…
+            </>
+          ) : (
+            'Aktualizovat nyní'
+          )}
+        </button>
+      </div>
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-[#0f172a] px-3 py-2 text-xs text-white shadow-lg">
+          {toast}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function AutoUpdatesSection({ rulesByKey, userId, onRulesChanged }) {
+  const [pricesAt, setPricesAt] = useState(null)
+  const [recsAt, setRecsAt] = useState(null)
+
+  const refreshStamps = useCallback(async () => {
+    try {
+      const [p, r] = await Promise.all([
+        fetchLastPriceUpdateAt().catch(() => null),
+        fetchLastRecommendationsUpdateAt().catch(() => null),
+      ])
+      setPricesAt(p)
+      setRecsAt(r)
+    } catch (err) {
+      console.warn('[AutoUpdates] stamps', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshStamps()
+  }, [refreshStamps])
+
+  return (
+    <section className="border-t border-[#e2e8f0] pt-4">
+      <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[#94a3b8]">
+        Automatické aktualizace
+      </h2>
+      <div className="border-t border-[#e2e8f0]">
+        <CronUpdateRow
+          label="Denní aktualizace cen"
+          ruleKey="cron_prices_active"
+          lastUpdatedAt={pricesAt}
+          toastSuccess="Ceny aktualizovány"
+          rulesByKey={rulesByKey}
+          userId={userId}
+          onRulesChanged={onRulesChanged}
+          onRefreshStamp={refreshStamps}
+        />
+        <CronUpdateRow
+          label="Denní aktualizace doporučení"
+          ruleKey="cron_recommendations_active"
+          lastUpdatedAt={recsAt}
+          toastSuccess="Doporučení aktualizována"
+          rulesByKey={rulesByKey}
+          userId={userId}
+          onRulesChanged={onRulesChanged}
+          onRefreshStamp={refreshStamps}
+        />
+      </div>
+    </section>
+  )
 }

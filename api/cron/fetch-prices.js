@@ -248,6 +248,7 @@ export default async function handler(req, res) {
 
   const started = Date.now()
   const date = todayISO()
+  const forceRun = req.query?.force === '1' || req.query?.force === 'true'
   const fetchFundamentals = isMondayUTC() || req.query?.forceFundamentals === 'true'
   const errors = []
   let pricesUpserted = 0
@@ -257,6 +258,25 @@ export default async function handler(req, res) {
 
   try {
     const supabase = getAdminClient()
+
+    if (!forceRun) {
+      const { data: flagRows } = await supabase
+        .from('inv_rules')
+        .select('value')
+        .eq('key', 'cron_prices_active')
+        .limit(1)
+      const flag = flagRows?.[0]?.value
+      if (flag != null && String(flag).toLowerCase() === 'false') {
+        return res.status(200).json({
+          ok: true,
+          skipped: true,
+          reason: 'Cron is disabled',
+          date,
+          ms: Date.now() - started,
+        })
+      }
+    }
+
     const tickers = await collectTickers(supabase)
     console.log(`[cron/fetch-prices] tickers=${tickers.length} fundamentals=${fetchFundamentals}`)
 

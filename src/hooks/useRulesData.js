@@ -17,6 +17,15 @@ import {
   parseRuleNumeric,
 } from '../lib/rules'
 
+const CRON_RULE_DEFAULTS = [
+  { key: 'cron_prices_active', defaultValue: 'true', label: 'Denní aktualizace cen' },
+  {
+    key: 'cron_recommendations_active',
+    defaultValue: 'true',
+    label: 'Denní aktualizace doporučení',
+  },
+]
+
 export function useRulesData() {
   const { user } = useAuth()
   const [loading, setLoading] = useState(true)
@@ -30,7 +39,10 @@ export function useRulesData() {
       if (row.key) byKey[row.key] = row
     }
 
-    const missing = collectRuleDefs().filter((def) => !byKey[def.key])
+    const missing = [
+      ...collectRuleDefs().filter((def) => !byKey[def.key]),
+      ...CRON_RULE_DEFAULTS.filter((def) => !byKey[def.key]),
+    ]
     if (!missing.length) return rulesData
 
     const created = []

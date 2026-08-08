@@ -15,6 +15,9 @@
     },
     "api/cron/generate-recommendations.js": {
       "maxDuration": 60
+    },
+    "api/trigger-cron.js": {
+      "maxDuration": 60
     }
   },
   "rewrites": [

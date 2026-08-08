@@ -50,20 +50,27 @@ export async function deleteTransaction(id) {
   return true
 }
 
-/** Pravidla uživatele; fallback na všechna dostupná (sdílená). */
+/** Pravidla uživatele; shared fallback + own override podle key. */
 export async function fetchRules(userId) {
-  const own = await supabase
-    .from('inv_rules')
-    .select('id, user_id, key, value, description, updated_at')
-    .eq('user_id', userId)
+  const [own, all] = await Promise.all([
+    supabase
+      .from('inv_rules')
+      .select('id, user_id, key, value, description, updated_at')
+      .eq('user_id', userId),
+    supabase.from('inv_rules').select('id, user_id, key, value, description, updated_at'),
+  ])
 
   if (own.error) throw own.error
-  if (own.data?.length) return own.data
+  if (all.error) throw all.error
 
-  const all = await supabase
-    .from('inv_rules')
-    .select('id, user_id, key, value, description, updated_at')
-  return assertOk(all, 'inv_rules')
+  const byKey = {}
+  for (const row of all.data || []) {
+    if (row.key) byKey[row.key] = row
+  }
+  for (const row of own.data || []) {
+    if (row.key) byKey[row.key] = row
+  }
+  return Object.values(byKey)
 }
 
 export async function updateRule(id, value) {
@@ -88,6 +95,62 @@ export async function insertRule(row) {
 
   if (result.error) throw result.error
   return result.data
+}
+
+/**
+ * Upsert pravidla podle key (pro cron přepínače apod.).
+ * Nejdřív UPDATE všech řádků s key; pokud nic neprojde, INSERT.
+ */
+export async function upsertRuleByKey({ userId, key, value, description = null }) {
+  if (!userId) throw new Error('Chybí user_id')
+  if (!key) throw new Error('Chybí key')
+  const next = String(value)
+  const now = new Date().toISOString()
+
+  const { data: existing, error: selErr } = await supabase
+    .from('inv_rules')
+    .select('id, user_id, key, value')
+    .eq('key', key)
+
+  if (selErr) throw selErr
+
+  if (existing?.length) {
+    const { data: updated, error: updErr } = await supabase
+      .from('inv_rules')
+      .update({ value: next, updated_at: now })
+      .eq('key', key)
+      .select('id, user_id, key, value, description, updated_at')
+
+    if (updErr) throw updErr
+    if (updated?.length) return updated[0]
+
+    // RLS mohlo zablokovat UPDATE — zkus update vlastního řádku podle id
+    const own = existing.find((r) => r.user_id === userId) || existing[0]
+    const { data: byId, error: byIdErr } = await supabase
+      .from('inv_rules')
+      .update({ value: next, updated_at: now })
+      .eq('id', own.id)
+      .select('id, user_id, key, value, description, updated_at')
+      .maybeSingle()
+
+    if (byIdErr) throw byIdErr
+    if (byId) return byId
+  }
+
+  const { data: inserted, error: insErr } = await supabase
+    .from('inv_rules')
+    .insert({
+      user_id: userId,
+      key,
+      value: next,
+      description,
+      updated_at: now,
+    })
+    .select('id, user_id, key, value, description, updated_at')
+    .single()
+
+  if (insErr) throw insErr
+  return inserted
 }
 
 export async function fetchRulesLog(userId, limit = 100) {
@@ -155,6 +218,61 @@ export async function fetchTodayRecommendations() {
     .order('priority', { ascending: true })
 
   return assertOk(result, 'inv_recommendations')
+}
+
+/** Poslední aktualizace cen (MAX date + updated_at). */
+export async function fetchLastPriceUpdateAt() {
+  const result = await supabase
+    .from('inv_prices')
+    .select('date, updated_at')
+    .order('date', { ascending: false })
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (result.error) throw result.error
+  const row = result.data
+  if (!row) return null
+  return row.updated_at || row.date || null
+}
+
+/** Poslední aktualizace doporučení (MAX date + created_at). */
+export async function fetchLastRecommendationsUpdateAt() {
+  const result = await supabase
+    .from('inv_recommendations')
+    .select('date, created_at')
+    .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (result.error) throw result.error
+  const row = result.data
+  if (!row) return null
+  return row.created_at || row.date || null
+}
+
+/** Manuální spuštění cronu přes server proxy (JWT → CRON_SECRET). */
+export async function triggerCronJob(job) {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  if (sessionError) throw sessionError
+  const token = sessionData?.session?.access_token
+  if (!token) throw new Error('Nejste přihlášeni')
+
+  const res = await fetch('/api/trigger-cron', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ job }),
+  })
+
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(body.error || body.message || `Trigger failed (${res.status})`)
+  }
+  return body
 }
 
 /** Aktivní snooze alertů (snoozed_until >= today). */
