@@ -50,9 +50,14 @@ export const RULE_SECTIONS = [
     ],
     groups: [
       {
-        title: 'SPYI pauza',
+        title: 'S&P 500 / SPYI pauza',
         rows: [
-          { key: 'spyi_pause_pe', label: 'SPYI obnovit při P/E pod', format: 'number', defaultValue: '21' },
+          {
+            key: 'sp500_pe_threshold',
+            label: 'S&P 500 P/E práh (pauza)',
+            format: 'number',
+            defaultValue: '21',
+          },
           {
             key: 'spyi_resume_correction',
             label: '+ korekce min',
@@ -116,9 +121,9 @@ export const RULE_SECTIONS = [
   },
 ]
 
-/** Mock tržní indikátory (později inv_prices). */
+/** Mock tržní indikátory (fallback, když chybí inv_rules). */
 export const MARKET_MOCK = {
-  spyiPe: 22.4,
+  sp500Pe: 22.4,
   spAthDistance: -0.032,
 }
 

@@ -163,28 +163,73 @@ async function getRuleNumber(supabase, key, fallback) {
   return Number.isFinite(n) ? n : fallback
 }
 
-/** SPYI P/E, S&P vs ATH, auto SPYI status → inv_rules */
+/** One-time rename of legacy SPYI market keys → sp500_*. */
+async function migrateMarketRuleKeys(supabase) {
+  const renames = [
+    ['spyi_pe_current', 'sp500_pe_current'],
+    ['spyi_pe_threshold', 'sp500_pe_threshold'],
+    ['spyi_pause_pe', 'sp500_pe_threshold'],
+    ['spyi_status', 'sp500_status'],
+  ]
+
+  for (const [fromKey, toKey] of renames) {
+    const { data: fromRows, error: fromErr } = await supabase
+      .from('inv_rules')
+      .select('id, value')
+      .eq('key', fromKey)
+    if (fromErr || !fromRows?.length) continue
+
+    const { data: toRows } = await supabase.from('inv_rules').select('id').eq('key', toKey).limit(1)
+
+    if (toRows?.length) {
+      const { error } = await supabase.from('inv_rules').delete().eq('key', fromKey)
+      if (error) {
+        console.warn('[cron/fetch-prices] migrate delete', fromKey, error.message)
+      } else {
+        console.log(`[cron/fetch-prices] migrated drop legacy key ${fromKey} (kept ${toKey})`)
+      }
+    } else {
+      const { error } = await supabase
+        .from('inv_rules')
+        .update({ key: toKey, updated_at: new Date().toISOString() })
+        .eq('key', fromKey)
+      if (error) {
+        console.warn('[cron/fetch-prices] migrate rename', fromKey, error.message)
+      } else {
+        console.log(`[cron/fetch-prices] migrated ${fromKey} → ${toKey}`)
+      }
+    }
+  }
+}
+
+/** S&P 500 P/E (SPY), S&P vs ATH, auto status → inv_rules */
 async function updateMarketIndicators(supabase, yahooStats, errors) {
-  const out = { spyiPe: null, sp500VsAth: null, spyiStatus: null }
+  const out = { sp500Pe: null, sp500VsAth: null, sp500Status: null }
 
   try {
-    const spyi = await yahooFinance.quote('SPYI')
+    await migrateMarketRuleKeys(supabase)
+  } catch (err) {
+    console.warn('[cron/fetch-prices] migrateMarketRuleKeys', err.message)
+  }
+
+  try {
+    const spy = await yahooFinance.quote('SPY')
     yahooStats.ok += 1
-    const pe = spyi?.trailingPE
+    const pe = spy?.trailingPE
     if (pe == null || !Number.isFinite(Number(pe))) {
-      errors.push({ type: 'market_spyi_pe_empty' })
-      console.error('[cron/fetch-prices] SPYI trailingPE empty')
+      errors.push({ type: 'market_spy_pe_empty' })
+      console.error('[cron/fetch-prices] SPY trailingPE empty')
     } else {
       const peStr = Number(pe).toFixed(2)
-      await setRuleValue(supabase, 'spyi_pe_current', peStr)
-      out.spyiPe = peStr
-      console.log('[cron/fetch-prices] spyi_pe_current=', peStr)
+      await setRuleValue(supabase, 'sp500_pe_current', peStr)
+      out.sp500Pe = peStr
+      console.log('[cron/fetch-prices] sp500_pe_current=', peStr)
     }
     await sleep(200)
   } catch (err) {
     yahooStats.failed += 1
-    errors.push({ type: 'market_spyi', error: err.message })
-    console.error('[cron/fetch-prices] SPYI quote failed', err.message)
+    errors.push({ type: 'market_spy', error: err.message })
+    console.error('[cron/fetch-prices] SPY quote failed', err.message)
   }
 
   try {
@@ -209,29 +254,32 @@ async function updateMarketIndicators(supabase, yahooStats, errors) {
   }
 
   try {
-    let threshold = await getRuleNumber(supabase, 'spyi_pe_threshold', null)
+    let threshold = await getRuleNumber(supabase, 'sp500_pe_threshold', null)
+    if (threshold == null) {
+      threshold = await getRuleNumber(supabase, 'spyi_pe_threshold', null)
+    }
     if (threshold == null) {
       threshold = await getRuleNumber(supabase, 'spyi_pause_pe', 21)
     }
 
-    const peNum = out.spyiPe != null ? Number(out.spyiPe) : null
+    const peNum = out.sp500Pe != null ? Number(out.sp500Pe) : null
     if (peNum != null && Number.isFinite(peNum)) {
       const nextStatus = peNum > threshold ? 'PAUZA' : 'AKTIVNÍ'
-      const prev = await setRuleValue(supabase, 'spyi_status', nextStatus)
-      out.spyiStatus = nextStatus
+      const prev = await setRuleValue(supabase, 'sp500_status', nextStatus)
+      out.sp500Status = nextStatus
       if (prev.previous != null && String(prev.previous) !== nextStatus) {
         console.log(
-          `[cron/fetch-prices] spyi_status changed: ${prev.previous} → ${nextStatus} (PE ${peNum} vs threshold ${threshold})`,
+          `[cron/fetch-prices] sp500_status changed: ${prev.previous} → ${nextStatus} (PE ${peNum} vs threshold ${threshold})`,
         )
       } else {
         console.log(
-          `[cron/fetch-prices] spyi_status=${nextStatus} (PE ${peNum} vs threshold ${threshold})`,
+          `[cron/fetch-prices] sp500_status=${nextStatus} (PE ${peNum} vs threshold ${threshold})`,
         )
       }
     }
   } catch (err) {
-    errors.push({ type: 'market_spyi_status', error: err.message })
-    console.error('[cron/fetch-prices] spyi_status update failed', err.message)
+    errors.push({ type: 'market_sp500_status', error: err.message })
+    console.error('[cron/fetch-prices] sp500_status update failed', err.message)
   }
 
   return out

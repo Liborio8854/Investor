@@ -436,7 +436,14 @@ function buildSystemPrompt({
   const snoozeList =
     snoozedTickers.length > 0 ? snoozedTickers.join(', ') : '(žádné)'
 
-  const spyiStatus = getRuleValue(rules, 'spyi_status', '—')
+  const sp500Pe =
+    getRuleValue(rules, 'sp500_pe_current', null) ?? getRuleValue(rules, 'spyi_pe_current', '—')
+  const sp500Threshold =
+    getRuleValue(rules, 'sp500_pe_threshold', null) ??
+    getRuleValue(rules, 'spyi_pe_threshold', null) ??
+    getRuleValue(rules, 'spyi_pause_pe', '21')
+  const sp500Status =
+    getRuleValue(rules, 'sp500_status', null) ?? getRuleValue(rules, 'spyi_status', '—')
 
   return `Jsi investiční poradce pro českou value investing strategii. Generuješ denní doporučení.
 
@@ -448,7 +455,9 @@ ticker | název | BF rating | cíl | aktuální cena | vzdálenost od cíle | m�
 ${watchBlock}
 Pokud cíl = —, ticker nemá cílovou cenu — nezobrazuj vzdálenost a nedoporučuj nákup podle vzdálenosti od cíle.
 
-SPYI STATUS (aktuální): ${spyiStatus}
+S&P 500 P/E (zdroj: SPY ETF): ${sp500Pe}, práh: ${sp500Threshold}, status: ${sp500Status}
+Pokud S&P 500 P/E > práh → PAUZA: nekupovat SPYI.DE, alokaci směřovat do MWEQ.DE
+Pokud S&P 500 P/E ≤ práh → AKTIVNÍ: kupovat SPYI.DE (MWEQ.DE nedoporučuj)
 
 AKTUÁLNÍ POZICE:
 ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | soft limit | hard/opp limit | limit status
@@ -517,7 +526,7 @@ Logika výběru BUY:
 - Pokud je pozice na limitu nebo blízko (>90 % soft limitu), NEKUPUJ — řekni "pozice na limitu"
 - BF-A v buy zóně smí růst až k opportunity limitu (${fmtPctPlain(limits.opportunity)})
 - Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace)
-MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k SPYI. Pokud je spyi_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je SPYI v pauze. Pokud je spyi_status = AKTIVNÍ, MWEQ nedoporučuj.
+MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k SPYI.DE. Pokud je sp500_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je S&P 500 P/E nad prahem (PAUZA). Pokud je sp500_status = AKTIVNÍ, MWEQ nedoporučuj (preferuj SPYI.DE dle plánu).
 Priorita nákupů:
 1. Nejdřív value akcie v buy zóně (vzdálenost od cíle < 5 %) — to jsou příležitosti, které nemusí trvat
 2. Až pak MWEQ.DE jako doplnění zbývající alokace
@@ -526,7 +535,7 @@ Příklad: Pokud RYAAY je 2 % od cíle a zbývá 12 000 Kč alokace:
 - Doporuč nejdřív RYAAY (např. 5 ks za ~6 000 Kč)
 - Zbytek alokace (6 000 Kč) do MWEQ.DE
 - SUMMARY: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
-Pokud žádná akcie není v buy zóně, celou alokaci do MWEQ.DE (pokud SPYI PAUZA).
+Pokud žádná akcie není v buy zóně, celou alokaci do MWEQ.DE (pokud sp500_status = PAUZA).
 WATCH: ticker se blíží k zóně (10-15 %); také soft-limit upozornění (BRK nad soft / standardní nad limitem ale ne hard)
 ALERT: jen hard-limit překročení (BRK > hard), standardní pozice výrazně nad opportunity (>18 %), nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery ani české kotvy (KOMB.PR, CEZ.PR). Nikdy nepoužívej hardcoded 10 % — ber limity z LIMITY POZIC.
 REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň; také při BRK nad hard limitem (ne u KOMB.PR / CEZ.PR)

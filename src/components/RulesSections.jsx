@@ -149,9 +149,9 @@ export function MarketIndicators({ market }) {
       </h2>
       <div className="space-y-2 border-t border-[#e2e8f0] pt-3 text-sm">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <span className="text-[#475569]">SPYI P/E aktuálně</span>
+          <span className="text-[#475569]">S&amp;P 500 P/E aktuálně</span>
           <span className="tabular-nums text-[#0f172a]">
-            {market.spyiPe.toLocaleString('cs-CZ', { maximumFractionDigits: 1 })}
+            {market.sp500Pe.toLocaleString('cs-CZ', { maximumFractionDigits: 1 })}
             <span className={`ml-2 text-xs font-medium ${market.peOver ? 'text-[#dc2626]' : 'text-[#059669]'}`}>
               {market.peOver ? `🔴 nad prahem (${market.pausePe})` : `🟢 pod prahem (${market.pausePe})`}
             </span>
@@ -172,8 +172,8 @@ export function MarketIndicators({ market }) {
         <p className="pl-3 text-xs text-[#94a3b8]">└ Žebřík: {market.ladderHint}</p>
 
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[#475569]">SPYI status</span>
-          <span className="font-medium text-[#0f172a]">{market.spyiStatus}</span>
+          <span className="text-[#475569]">S&amp;P 500 status</span>
+          <span className="font-medium text-[#0f172a]">{market.sp500Status}</span>
         </div>
       </div>
     </section>

@@ -147,21 +147,41 @@ export function useRulesData() {
   )
 
   const market = useMemo(() => {
-    const pausePe = parseRuleNumeric(getRuleValue(rulesByKey, 'spyi_pause_pe', '21')) ?? 21
+    const pausePe =
+      parseRuleNumeric(
+        getRuleValue(
+          rulesByKey,
+          'sp500_pe_threshold',
+          getRuleValue(rulesByKey, 'spyi_pe_threshold', getRuleValue(rulesByKey, 'spyi_pause_pe', '21')),
+        ),
+      ) ?? 21
     const resumeCorrection =
       parseRuleNumeric(getRuleValue(rulesByKey, 'spyi_resume_correction', '-20')) ?? -20
-    const pe = MARKET_MOCK.spyiPe
-    const ath = MARKET_MOCK.spAthDistance
+    const pe =
+      parseRuleNumeric(
+        getRuleValue(rulesByKey, 'sp500_pe_current', getRuleValue(rulesByKey, 'spyi_pe_current', '')),
+      ) ?? MARKET_MOCK.sp500Pe
+    const ath =
+      parseRuleNumeric(getRuleValue(rulesByKey, 'sp500_vs_ath', '')) ?? MARKET_MOCK.spAthDistance
+    // sp500_vs_ath is stored as percent points (-3.2), computeSpyiStatus expects ratio or %
+    const athRatio = Math.abs(ath) > 1 ? ath / 100 : ath
     const peOver = pe > pausePe
-    const spyi = computeSpyiStatus(pe, pausePe, resumeCorrection, ath)
+    const storedStatus = getRuleValue(rulesByKey, 'sp500_status', getRuleValue(rulesByKey, 'spyi_status', ''))
+    const computed = computeSpyiStatus(pe, pausePe, resumeCorrection, athRatio)
+    const statusLabel =
+      storedStatus === 'PAUZA' || storedStatus === 'AKTIVNÍ'
+        ? storedStatus === 'PAUZA'
+          ? '⏸️ PAUZA'
+          : '▶️ AKTIVNÍ'
+        : computed.label
 
     return {
-      spyiPe: pe,
+      sp500Pe: pe,
       pausePe,
       peOver,
-      athDistance: ath,
-      ladderHint: computeLadderHint(ath),
-      spyiStatus: spyi.label,
+      athDistance: athRatio,
+      ladderHint: computeLadderHint(athRatio),
+      sp500Status: statusLabel,
     }
   }, [rulesByKey])
 
