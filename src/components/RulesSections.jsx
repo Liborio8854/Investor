@@ -304,6 +304,7 @@ function ToggleSwitch({ checked, disabled, onChange, label }) {
 function CronUpdateRow({
   label,
   ruleKey,
+  cronType,
   lastUpdatedAt,
   toastSuccess,
   rulesByKey,
@@ -361,15 +362,17 @@ function CronUpdateRow({
     }
   }
 
-  const runNow = async () => {
+  const runNow = async (e) => {
+    e?.preventDefault?.()
+    e?.stopPropagation?.()
+    if (busyRun) return
     setBusyRun(true)
     try {
-      const job = ruleKey === 'cron_prices_active' ? 'fetch-prices' : 'generate-recommendations'
-      await triggerCronJob(job)
+      await triggerCronJob(cronType)
       await onRefreshStamp?.()
       setToast(toastSuccess)
     } catch (err) {
-      console.error('[AutoUpdates]', err)
+      console.error('[AutoUpdates] runNow', err)
       setToast(err.message || 'Aktualizace selhala')
     } finally {
       setBusyRun(false)
@@ -377,12 +380,9 @@ function CronUpdateRow({
   }
 
   return (
-    <div className="border-t border-[#f1f5f9] py-2.5 first:border-t-0">
-      <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 text-sm text-[#475569]">{label}</span>
-        <span className="shrink-0 text-xs tabular-nums text-[#64748b]">
-          {formatDateTime(lastUpdatedAt)}
-        </span>
+    <div className="border-t border-[#e2e8f0] py-4 first:border-t-0">
+      <div className="flex items-center justify-between gap-3">
+        <span className="min-w-0 text-sm text-[#475569]">{label}</span>
         <div className="flex shrink-0 items-center gap-2">
           <span className={`text-[10px] font-medium ${isActive ? 'text-emerald-600' : 'text-[#94a3b8]'}`}>
             {isActive ? 'Aktivní' : 'Neaktivní'}
@@ -395,12 +395,17 @@ function CronUpdateRow({
           />
         </div>
       </div>
-      <div className="mt-2">
+
+      <p className="mt-1.5 text-xs tabular-nums text-[#64748b]">
+        Naposledy: {formatDateTime(lastUpdatedAt)}
+      </p>
+
+      <div className="mt-2.5">
         <button
           type="button"
           disabled={busyRun}
           onClick={runNow}
-          className="inline-flex items-center gap-1.5 rounded-md border border-[#e2e8f0] bg-white px-2.5 py-1 text-xs font-medium text-[#475569] hover:border-[#cbd5e1] hover:text-[#0f172a] disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md border border-[#e2e8f0] bg-white px-2.5 py-1 text-xs font-medium text-[#475569] hover:border-[#cbd5e1] hover:text-[#0f172a] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busyRun ? (
             <>
@@ -408,10 +413,11 @@ function CronUpdateRow({
               Aktualizuji…
             </>
           ) : (
-            'Aktualizovat nyní'
+            'Aktualizovat jednorázově nyní'
           )}
         </button>
       </div>
+
       {toast && (
         <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-[#0f172a] px-3 py-2 text-xs text-white shadow-lg">
           {toast}
@@ -451,6 +457,7 @@ export function AutoUpdatesSection({ rulesByKey, userId, onRulesChanged }) {
         <CronUpdateRow
           label="Denní aktualizace cen"
           ruleKey="cron_prices_active"
+          cronType="prices"
           lastUpdatedAt={pricesAt}
           toastSuccess="Ceny aktualizovány"
           rulesByKey={rulesByKey}
@@ -461,6 +468,7 @@ export function AutoUpdatesSection({ rulesByKey, userId, onRulesChanged }) {
         <CronUpdateRow
           label="Denní aktualizace doporučení"
           ruleKey="cron_recommendations_active"
+          cronType="recommendations"
           lastUpdatedAt={recsAt}
           toastSuccess="Doporučení aktualizována"
           rulesByKey={rulesByKey}

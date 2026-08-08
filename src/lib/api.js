@@ -252,8 +252,10 @@ export async function fetchLastRecommendationsUpdateAt() {
   return row.created_at || row.date || null
 }
 
-/** Manuální spuštění cronu přes server proxy (JWT → CRON_SECRET). */
-export async function triggerCronJob(job) {
+/** Manuální spuštění cronu přes server proxy (JWT → CRON_SECRET).
+ *  type: 'prices' | 'recommendations'
+ */
+export async function triggerCronJob(type) {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
   if (sessionError) throw sessionError
   const token = sessionData?.session?.access_token
@@ -265,12 +267,23 @@ export async function triggerCronJob(job) {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ job }),
+    body: JSON.stringify({ type }),
   })
 
-  const body = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    throw new Error(body.error || body.message || `Trigger failed (${res.status})`)
+  const text = await res.text()
+  let body = {}
+  try {
+    body = text ? JSON.parse(text) : {}
+  } catch {
+    throw new Error(
+      res.ok
+        ? 'Neplatná odpověď ze serveru'
+        : `Trigger selhal (${res.status}). Spouštěj přes Vercel (api/trigger-cron).`,
+    )
+  }
+
+  if (!res.ok || body.ok === false) {
+    throw new Error(body.error || body.message || `Trigger selhal (${res.status})`)
   }
   return body
 }

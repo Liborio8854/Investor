@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
 
 const JOBS = {
+  prices: '/api/cron/fetch-prices',
+  recommendations: '/api/cron/generate-recommendations',
+  // zpětná kompatibilita
   'fetch-prices': '/api/cron/fetch-prices',
   'generate-recommendations': '/api/cron/generate-recommendations',
 }
@@ -11,6 +14,17 @@ function getSupabaseUrl() {
 
 function getAnonKey() {
   return process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
+}
+
+function parseBody(req) {
+  const raw = req.body
+  if (raw == null || raw === '') return {}
+  if (typeof raw === 'object') return raw
+  try {
+    return JSON.parse(String(raw))
+  } catch {
+    return {}
+  }
 }
 
 async function requireUser(req) {
@@ -52,17 +66,18 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Unauthorized' })
     }
 
-    const job = String(req.body?.job || req.query?.job || '').trim()
-    const path = JOBS[job]
+    const payload = parseBody(req)
+    const type = String(payload.type || payload.job || req.query?.type || req.query?.job || '').trim()
+    const path = JOBS[type]
     if (!path) {
       return res.status(400).json({
-        error: 'Invalid job',
-        allowed: Object.keys(JOBS),
+        error: 'Invalid type',
+        allowed: ['prices', 'recommendations'],
       })
     }
 
     const target = `${absoluteUrl(req, path)}?force=1`
-    console.log(`[trigger-cron] user=${user.id} job=${job}`)
+    console.log(`[trigger-cron] user=${user.id} type=${type} → ${path}`)
 
     const upstream = await fetch(target, {
       method: 'POST',
@@ -77,13 +92,23 @@ export default async function handler(req, res) {
     try {
       body = JSON.parse(text)
     } catch {
-      body = { raw: text }
+      body = { raw: text?.slice?.(0, 500) || text }
     }
 
-    return res.status(upstream.status).json({
-      ...body,
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({
+        ok: false,
+        error: body.error || body.message || `Cron failed (${upstream.status})`,
+        type,
+        ...body,
+      })
+    }
+
+    return res.status(200).json({
+      ok: true,
+      type,
       triggeredBy: user.id,
-      job,
+      ...body,
     })
   } catch (err) {
     console.error('[trigger-cron] fatal', err)
