@@ -396,16 +396,15 @@ function CronUpdateRow({
         </div>
       </div>
 
-      <p className="mt-1.5 text-xs tabular-nums text-[#64748b]">
-        Naposledy: {formatDateTime(lastUpdatedAt)}
-      </p>
-
-      <div className="mt-2.5">
+      <div className="mt-1.5 flex items-center justify-between gap-3">
+        <p className="min-w-0 text-xs tabular-nums text-[#64748b]">
+          Naposledy: {formatDateTime(lastUpdatedAt)}
+        </p>
         <button
           type="button"
           disabled={busyRun}
           onClick={runNow}
-          className="inline-flex items-center gap-1.5 rounded-md border border-[#e2e8f0] bg-white px-2.5 py-1 text-xs font-medium text-[#475569] hover:border-[#cbd5e1] hover:text-[#0f172a] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#e2e8f0] bg-white px-2.5 py-1 text-xs font-medium text-[#475569] hover:border-[#cbd5e1] hover:text-[#0f172a] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busyRun ? (
             <>
@@ -413,7 +412,7 @@ function CronUpdateRow({
               Aktualizuji…
             </>
           ) : (
-            'Aktualizovat jednorázově nyní'
+            'Aktualizovat nyní'
           )}
         </button>
       </div>
