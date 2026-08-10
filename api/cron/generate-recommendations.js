@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 
-const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.5-flash']
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'] // primary → fallback
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 /** Approximate CZK FX for portfolio weight / allocation context. */
@@ -646,8 +646,12 @@ function normalizeRecommendations(items, date) {
 async function callGemini(apiKey, systemPrompt, userPrompt) {
   let lastError = null
 
-  for (const model of GEMINI_MODELS) {
+  for (let i = 0; i < GEMINI_MODELS.length; i++) {
+    const model = GEMINI_MODELS[i]
+    const isPrimary = i === 0
+    const fallback = GEMINI_MODELS[i + 1]
     const url = `${GEMINI_BASE}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`
+
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -662,18 +666,36 @@ async function callGemini(apiKey, systemPrompt, userPrompt) {
       })
 
       const body = await res.json().catch(() => ({}))
+      // Any HTTP error (incl. 429 quota exceeded) → immediate fallback
       if (!res.ok) {
         const msg = body?.error?.message || res.statusText || `HTTP ${res.status}`
         lastError = new Error(`${model}: ${msg}`)
-        console.error('[cron/generate-recommendations] gemini fail', model, msg)
+        console.error(
+          `[cron/generate-recommendations] gemini fail model=${model} status=${res.status}: ${msg}`,
+        )
+        if (fallback) {
+          console.warn(
+            `[cron/generate-recommendations] falling back ${model} → ${fallback}`,
+          )
+        }
         continue
       }
 
       const text = body?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || ''
+      console.log(
+        `[cron/generate-recommendations] gemini ok model=${model}${isPrimary ? ' (primary)' : ' (fallback)'}`,
+      )
       return { model, text }
     } catch (err) {
-      lastError = err
-      console.error('[cron/generate-recommendations] gemini error', model, err.message)
+      lastError = err instanceof Error ? err : new Error(String(err))
+      console.error(
+        `[cron/generate-recommendations] gemini error model=${model}: ${lastError.message}`,
+      )
+      if (fallback) {
+        console.warn(
+          `[cron/generate-recommendations] falling back ${model} → ${fallback}`,
+        )
+      }
     }
   }
 
