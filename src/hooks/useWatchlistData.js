@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { fetchWatchlist, insertWatchlistItem, updateWatchlistItem } from '../lib/api'
+import { fetchLatestPrices, fetchWatchlist, insertWatchlistItem, updateWatchlistItem } from '../lib/api'
 import { enrichAndSort, filterByStatus } from '../lib/watchlist'
 
 export function useWatchlistData() {
@@ -8,6 +8,7 @@ export function useWatchlistData() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [items, setItems] = useState([])
+  const [priceByTicker, setPriceByTicker] = useState(() => new Map())
 
   const reload = useCallback(
     async ({ silent = false } = {}) => {
@@ -16,10 +17,19 @@ export function useWatchlistData() {
       try {
         if (!user?.id) {
           setItems([])
+          setPriceByTicker(new Map())
           return
         }
         const rows = await fetchWatchlist(user.id)
+        const tickers = rows.map((r) => r.ticker)
+        let prices = new Map()
+        try {
+          prices = await fetchLatestPrices(tickers)
+        } catch (priceErr) {
+          console.warn('[watchlist] prices', priceErr)
+        }
         setItems(rows)
+        setPriceByTicker(prices)
       } catch (err) {
         console.error('[watchlist]', err)
         setError(err.message || 'Nepodařilo se načíst watchlist')
@@ -34,7 +44,7 @@ export function useWatchlistData() {
     reload()
   }, [reload])
 
-  const enriched = useMemo(() => enrichAndSort(items), [items])
+  const enriched = useMemo(() => enrichAndSort(items, priceByTicker), [items, priceByTicker])
 
   const active = useMemo(() => filterByStatus(enriched, 'active'), [enriched])
   const brk = useMemo(() => filterByStatus(enriched, 'brk_section'), [enriched])

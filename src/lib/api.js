@@ -251,6 +251,51 @@ export async function fetchLastPriceUpdateAt() {
   return row.updated_at || row.date || null
 }
 
+/**
+ * Nejnovější cena per ticker z inv_prices.
+ * Ekvivalent: SELECT DISTINCT ON (ticker) ticker, date, price
+ *             FROM inv_prices ORDER BY ticker, date DESC
+ * @param {string[]} [tickers] — volitelný filtr; bez něj všechny tickery
+ * @returns {Promise<Map<string, { price: number, date: string }>>}
+ */
+export async function fetchLatestPrices(tickers) {
+  const list = [
+    ...new Set(
+      (tickers || [])
+        .map((t) => String(t || '').trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  ]
+
+  const since = new Date()
+  since.setUTCDate(since.getUTCDate() - 45)
+  const sinceISO = since.toISOString().slice(0, 10)
+
+  let query = supabase
+    .from('inv_prices')
+    .select('ticker, date, price')
+    .gte('date', sinceISO)
+    .order('date', { ascending: false })
+    .order('ticker', { ascending: true })
+
+  if (list.length) {
+    query = query.in('ticker', list)
+  }
+
+  const result = await query.limit(5000)
+  const rows = assertOk(result, 'inv_prices')
+
+  const map = new Map()
+  for (const row of rows) {
+    const ticker = String(row.ticker || '').trim().toUpperCase()
+    if (!ticker || map.has(ticker)) continue
+    const price = row.price != null ? Number(row.price) : null
+    if (price == null || !Number.isFinite(price)) continue
+    map.set(ticker, { price, date: row.date })
+  }
+  return map
+}
+
 /** Poslední aktualizace doporučení (MAX date + created_at). */
 export async function fetchLastRecommendationsUpdateAt() {
   const result = await supabase

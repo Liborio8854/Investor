@@ -1,4 +1,4 @@
-/** Mock ceny — později nahradíme Yahoo Finance / inv_prices */
+/** Fallback ceny, pokud v inv_prices chybí ticker (Watchlist preferuje DB). */
 export const MOCK_PRICES = {
   'KOMB.PR': { price: 1049, currency: 'CZK' },
   'CEZ.PR': { price: 1357, currency: 'CZK' },
