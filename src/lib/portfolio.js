@@ -204,6 +204,8 @@ export function computePositions(transactions, fxMap, asOf = new Date(), priceBy
         currency: String(tx.currency || 'CZK').toUpperCase(),
         qty: 0,
         costCzk: 0,
+        buyQty: 0,
+        buyNotional: 0,
         lots: [],
         accounts: new Set(),
       })
@@ -220,6 +222,8 @@ export function computePositions(transactions, fxMap, asOf = new Date(), priceBy
     if (isBuy(tx.type)) {
       pos.qty += qty
       pos.costCzk += toCzk(price * qty, txCurrency, fxMap)
+      pos.buyQty += qty
+      pos.buyNotional += price * qty
       pos.lots.push({
         qty,
         remaining: qty,
@@ -249,6 +253,7 @@ export function computePositions(transactions, fxMap, asOf = new Date(), priceBy
     const remainingQty = openLots.reduce((s, l) => s + l.qty, 0)
     const weightedSum = openLots.reduce((s, l) => s + l.price * l.qty, 0)
     const avgPrice = remainingQty > 0 ? weightedSum / remainingQty : 0
+    const avgBuyPrice = pos.buyQty > 0 ? pos.buyNotional / pos.buyQty : 0
 
     const price = latestMarketPrice(priceByTicker, pos.ticker) ?? 0
     const currency = pos.currency
@@ -269,6 +274,7 @@ export function computePositions(transactions, fxMap, asOf = new Date(), priceBy
       qty: pos.qty,
       price,
       avgPrice,
+      avgBuyPrice,
       valueCzk,
       investedCzk,
       pnlCzk,

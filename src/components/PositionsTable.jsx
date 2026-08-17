@@ -91,10 +91,16 @@ function PositionCard({ position, weight, open, onToggle, companyName }) {
           </div>
 
           <div className="mt-0.5 flex items-baseline justify-between gap-2 text-[13px]">
-            <span className="min-w-0 truncate text-[#475569]">
+            <span className="min-w-0 text-[#475569]">
               <span className="uppercase">{position.currency}</span>
               {' · '}
               {formatNum(position.qty)} ks
+              {position.avgBuyPrice > 0 ? (
+                <>
+                  {' · '}
+                  Ø {formatPrice(position.avgBuyPrice, position.currency)}
+                </>
+              ) : null}
             </span>
             <span className={`shrink-0 font-semibold tabular-nums ${pnlColor(position.pricePnlPct)}`}>
               P&amp;L: {formatPctSigned(position.pricePnlPct)}
