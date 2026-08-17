@@ -245,5 +245,6 @@ export function useTransactionsData() {
     editTransaction,
     removeTransaction,
     completeTask,
+    watchlist,
   }
 }

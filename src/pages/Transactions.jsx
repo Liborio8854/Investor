@@ -65,6 +65,7 @@ export default function Transactions() {
     editTransaction,
     removeTransaction,
     completeTask,
+    watchlist,
   } = useTransactionsData()
 
   const [modalMode, setModalMode] = useState(null) // 'new' | 'edit'
@@ -180,6 +181,7 @@ export default function Transactions() {
       {modalMode && (
         <TransactionModal
           tx={modalMode === 'edit' ? editTx : null}
+          watchlist={watchlist}
           onClose={closeModal}
           onSave={handleSave}
           onDelete={modalMode === 'edit' ? handleDelete : undefined}

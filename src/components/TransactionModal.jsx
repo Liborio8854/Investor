@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { todayISO } from '../lib/format'
 
 const inputClass =
@@ -23,6 +23,9 @@ const PORTFOLIO_OPTIONS = [
 ]
 
 const CURRENCY_OPTIONS = ['CZK', 'EUR', 'USD']
+
+/** XTB přípony, které Yahoo nepoužívá — oříznout. */
+const STRIP_SUFFIXES = ['.US', '.UK', '.NL', '.FR']
 
 function emptyForm() {
   return {
@@ -55,12 +58,25 @@ function fromTx(tx) {
   }
 }
 
+/** Uppercase + oříznutí XTB přípon (.US/.UK/.NL/.FR). .DE/.AS/.PR/.PA/.MI ponechá. */
+export function normalizeTickerInput(raw) {
+  const ticker = String(raw || '').trim().toUpperCase()
+  if (!ticker) return { ticker: '', stripped: null }
+  for (const suffix of STRIP_SUFFIXES) {
+    if (ticker.endsWith(suffix) && ticker.length > suffix.length) {
+      return { ticker: ticker.slice(0, -suffix.length), stripped: suffix }
+    }
+  }
+  return { ticker, stripped: null }
+}
+
 function toPayload(form) {
+  const { ticker } = normalizeTickerInput(form.ticker)
   return {
     portfolio: form.portfolio,
     type: form.type,
     account: form.account,
-    ticker: form.ticker.trim().toUpperCase(),
+    ticker,
     date: form.date,
     quantity: Number(form.quantity),
     price: Number(form.price),
@@ -99,18 +115,38 @@ function ModalShell({ title, onClose, children, footer }) {
   )
 }
 
-export default function TransactionModal({ tx, onClose, onSave, onDelete }) {
+export default function TransactionModal({ tx, watchlist = [], onClose, onSave, onDelete }) {
   const isEdit = Boolean(tx)
   const [form, setForm] = useState(() => (tx ? fromTx(tx) : emptyForm()))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
+  const [strippedSuffix, setStrippedSuffix] = useState(null)
+
+  const watchlistTickers = useMemo(() => {
+    const set = new Set()
+    for (const row of watchlist || []) {
+      const t = String(row.ticker || '').trim().toUpperCase()
+      if (t) set.add(t)
+    }
+    return set
+  }, [watchlist])
+
+  const tickerKey = String(form.ticker || '').trim().toUpperCase()
+  const unknownTicker = Boolean(tickerKey && watchlistTickers.size > 0 && !watchlistTickers.has(tickerKey))
 
   useEffect(() => {
     setForm(tx ? fromTx(tx) : emptyForm())
     setErr(null)
+    setStrippedSuffix(null)
   }, [tx])
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
+
+  const handleTickerChange = (e) => {
+    const { ticker, stripped } = normalizeTickerInput(e.target.value)
+    setForm((f) => ({ ...f, ticker }))
+    setStrippedSuffix(stripped)
+  }
 
   const submit = async (e) => {
     e.preventDefault()
@@ -233,16 +269,29 @@ export default function TransactionModal({ tx, onClose, onSave, onDelete }) {
           </label>
         </div>
 
-        <label className={labelClass}>
-          Ticker
-          <input
-            className={inputClass}
-            value={form.ticker}
-            onChange={set('ticker')}
-            required
-            autoComplete="off"
-          />
-        </label>
+        <div>
+          <label className={labelClass}>
+            Ticker
+            <input
+              className={inputClass}
+              value={form.ticker}
+              onChange={handleTickerChange}
+              required
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          {strippedSuffix && (
+            <p className="mt-1 text-xs text-[#2563eb]">
+              Přípona {strippedSuffix} odstraněna — používáme Yahoo formát.
+            </p>
+          )}
+          {unknownTicker && (
+            <p className="mt-1 text-xs text-amber-700">
+              Ticker není ve watchlistu. Zkontroluj formát (např. RYAAY, ne RYAAY.US).
+            </p>
+          )}
+        </div>
 
         <label className={labelClass}>
           Datum
