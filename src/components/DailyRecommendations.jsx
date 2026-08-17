@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import {
   fetchActiveAlertSnoozes,
-  fetchTodayRecommendations,
+  fetchLatestRecommendations,
   upsertAlertSnooze,
 } from '../lib/api'
-import { formatPrice } from '../lib/format'
+import { formatDateTime, formatPrice } from '../lib/format'
 
 const STYLES = {
   buy: { bg: 'bg-emerald-50', border: 'border-emerald-100', badge: 'bg-emerald-600', label: 'BUY' },
@@ -32,6 +32,7 @@ const SNOOZE_DAYS = [30, 60, 90]
 export default function DailyRecommendations() {
   const { user } = useAuth()
   const [recs, setRecs] = useState([])
+  const [generatedAt, setGeneratedAt] = useState(null)
   const [snoozedTickers, setSnoozedTickers] = useState(() => new Set())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -44,11 +45,12 @@ export default function DailyRecommendations() {
     setLoading(true)
     setError(null)
     try {
-      const [data, snoozes] = await Promise.all([
-        fetchTodayRecommendations(),
+      const [latest, snoozes] = await Promise.all([
+        fetchLatestRecommendations(),
         user?.id ? fetchActiveAlertSnoozes(user.id) : Promise.resolve([]),
       ])
-      setRecs(data)
+      setRecs(latest.recommendations)
+      setGeneratedAt(latest.generatedAt)
       setSnoozedTickers(
         new Set(
           (snoozes || [])
@@ -126,6 +128,9 @@ export default function DailyRecommendations() {
   return (
     <section className="relative border-t border-[#e2e8f0] py-5">
       <h2 className="text-sm font-semibold text-[#0f172a]">Denní doporučení</h2>
+      {generatedAt && (
+        <p className="mt-0.5 text-xs text-[#94a3b8]">Vygenerováno: {formatDateTime(generatedAt)}</p>
+      )}
 
       {loading && <p className="mt-3 text-sm text-[#94a3b8]">Načítám doporučení…</p>}
 

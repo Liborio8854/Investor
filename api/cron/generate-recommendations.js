@@ -985,7 +985,11 @@ export default async function handler(req, res) {
       })
     }
 
-    const { error: delError } = await supabase.from('inv_recommendations').delete().eq('date', date)
+    // Smaž celou tabulku (ne jen dnešní datum) — v DB má zůstat jedna sada
+    const { error: delError } = await supabase
+      .from('inv_recommendations')
+      .delete()
+      .gte('created_at', '1970-01-01T00:00:00Z')
     if (delError) throw new Error(`delete inv_recommendations: ${delError.message}`)
 
     const { error: insError } = await supabase.from('inv_recommendations').insert(recommendations)

@@ -223,16 +223,33 @@ export async function fetchDashboardData(userId, yearMonth = currentYearMonth())
   return { transactions, rules, tasks }
 }
 
-/** Denní Gemini doporučení pro dnešek (priority ASC). */
-export async function fetchTodayRecommendations() {
-  const today = new Date().toISOString().slice(0, 10)
+/**
+ * Poslední vygenerovaná sada doporučení (priority ASC).
+ * Bere MAX(created_at) a řádky v okně ±2 s — i když v tabulce zůstanou duplicity.
+ */
+export async function fetchLatestRecommendations() {
+  const latestRes = await supabase
+    .from('inv_recommendations')
+    .select('created_at')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (latestRes.error) throw latestRes.error
+  const generatedAt = latestRes.data?.created_at || null
+  if (!generatedAt) return { recommendations: [], generatedAt: null }
+
+  const cutoff = new Date(new Date(generatedAt).getTime() - 2000).toISOString()
   const result = await supabase
     .from('inv_recommendations')
     .select('id, user_id, date, type, ticker, price, message, priority, created_at')
-    .eq('date', today)
+    .gte('created_at', cutoff)
     .order('priority', { ascending: true })
 
-  return assertOk(result, 'inv_recommendations')
+  return {
+    recommendations: assertOk(result, 'inv_recommendations'),
+    generatedAt,
+  }
 }
 
 /** Poslední aktualizace cen (MAX date + updated_at). */
