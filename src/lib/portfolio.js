@@ -1,4 +1,4 @@
-import { DEFAULT_FX, getMockPrice } from './mockPrices'
+import { DEFAULT_FX } from './mockPrices'
 
 /**
  * Build FX map: currency -> CZK rate from inv_fx_rates rows ({ pair, rate, date })
@@ -25,6 +25,19 @@ export function toCzk(amount, currency, fxMap) {
 
 function normalizeTicker(ticker) {
   return String(ticker || '').trim().toUpperCase()
+}
+
+/** Cena z inv_prices mapy (fetchLatestPrices). Bez záznamu → null. */
+function latestMarketPrice(priceByTicker, ticker) {
+  if (!priceByTicker || !ticker) return null
+  const raw =
+    typeof priceByTicker.get === 'function'
+      ? priceByTicker.get(ticker) ?? priceByTicker.get(normalizeTicker(ticker))
+      : priceByTicker[ticker] ?? priceByTicker[normalizeTicker(ticker)]
+  if (raw == null) return null
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null
+  const n = raw.price != null ? Number(raw.price) : null
+  return n != null && Number.isFinite(n) ? n : null
 }
 
 function isBuy(type) {
@@ -170,7 +183,7 @@ function computeDividendsByTicker(transactions, fxMap) {
  * BRYN.DE merges XTB + DIP into one row when both accounts are included.
  * Average price = weighted average of remaining FIFO lots (original currency).
  */
-export function computePositions(transactions, fxMap, asOf = new Date()) {
+export function computePositions(transactions, fxMap, asOf = new Date(), priceByTicker = null) {
   const byTicker = new Map()
   const dividendsByTicker = computeDividendsByTicker(transactions, fxMap)
 
@@ -237,9 +250,8 @@ export function computePositions(transactions, fxMap, asOf = new Date()) {
     const weightedSum = openLots.reduce((s, l) => s + l.price * l.qty, 0)
     const avgPrice = remainingQty > 0 ? weightedSum / remainingQty : 0
 
-    const mock = getMockPrice(pos.ticker)
-    const price = mock?.price ?? 0
-    const currency = mock?.currency || pos.currency
+    const price = latestMarketPrice(priceByTicker, pos.ticker) ?? 0
+    const currency = pos.currency
     const valueCzk = toCzk(price * pos.qty, currency, fxMap)
     const investedCzk = Math.max(pos.costCzk, 0)
     const pnlCzk = valueCzk - investedCzk
@@ -276,9 +288,14 @@ export function computePositions(transactions, fxMap, asOf = new Date()) {
   return positions
 }
 
-export function computePositionsForFilter(transactions, fxMap, accountFilter = 'all') {
+export function computePositionsForFilter(
+  transactions,
+  fxMap,
+  accountFilter = 'all',
+  priceByTicker = null,
+) {
   const filtered = filterTransactionsByAccount(transactions, accountFilter)
-  return computePositions(filtered, fxMap)
+  return computePositions(filtered, fxMap, new Date(), priceByTicker)
 }
 
 export function computeBrkInfo(positions, portfolioValue) {

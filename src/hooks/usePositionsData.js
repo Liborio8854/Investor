@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { fetchTransactions, fetchWatchlist } from '../lib/api'
+import { fetchLatestPrices, fetchTransactions, fetchWatchlist } from '../lib/api'
 import { DEFAULT_FX } from '../lib/mockPrices'
 import {
   computeBrkInfo,
@@ -24,6 +24,7 @@ export function usePositionsData(accountFilter = 'all', portfolioOwner = 'libor'
   const [error, setError] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [watchlist, setWatchlist] = useState([])
+  const [priceByTicker, setPriceByTicker] = useState(() => new Map())
 
   const fxMap = DEFAULT_FX
 
@@ -35,14 +36,29 @@ export function usePositionsData(accountFilter = 'all', portfolioOwner = 'libor'
       if (!user?.id) {
         setTransactions([])
         setWatchlist([])
+        setPriceByTicker(new Map())
         return
       }
       const [txs, wl] = await Promise.all([
         fetchTransactions(user.id),
         fetchWatchlist(user.id),
       ])
+      const tickers = [
+        ...new Set(
+          [...txs, ...wl]
+            .map((r) => String(r.ticker || '').trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ]
+      let prices = new Map()
+      try {
+        prices = await fetchLatestPrices(tickers)
+      } catch (priceErr) {
+        console.warn('[positions] prices', priceErr)
+      }
       setTransactions(txs)
       setWatchlist(wl)
+      setPriceByTicker(prices)
     } catch (err) {
       console.error('[positions]', err)
       setError(err.message || 'Nepodařilo se načíst data ze Supabase')
@@ -69,10 +85,10 @@ export function usePositionsData(accountFilter = 'all', portfolioOwner = 'libor'
 
   const positions = useMemo(() => {
     if (portfolioOwner === 'eda') {
-      return computePositionsForFilter(portfolioTx, fxMap, 'all')
+      return computePositionsForFilter(portfolioTx, fxMap, 'all', priceByTicker)
     }
-    return computePositionsForFilter(portfolioTx, fxMap, accountFilter)
-  }, [portfolioTx, fxMap, accountFilter, portfolioOwner])
+    return computePositionsForFilter(portfolioTx, fxMap, accountFilter, priceByTicker)
+  }, [portfolioTx, fxMap, accountFilter, portfolioOwner, priceByTicker])
 
   const portfolioValue = useMemo(() => computePortfolioValue(positions), [positions])
   const costBasis = useMemo(() => computeInvested(positions), [positions])

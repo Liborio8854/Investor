@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { fetchDashboardData } from '../lib/api'
+import { fetchDashboardData, fetchLatestPrices } from '../lib/api'
 import { currentYearMonth } from '../lib/format'
 import { DEFAULT_FX } from '../lib/mockPrices'
 import {
@@ -24,6 +24,7 @@ export function useDashboardData() {
   const [error, setError] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [rules, setRules] = useState([])
+  const [priceByTicker, setPriceByTicker] = useState(() => new Map())
 
   const ym = currentYearMonth()
   const fxMap = DEFAULT_FX
@@ -36,12 +37,27 @@ export function useDashboardData() {
       if (!user?.id) {
         setTransactions([])
         setRules([])
+        setPriceByTicker(new Map())
         return
       }
 
       const data = await fetchDashboardData(user.id, ym)
+      const tickers = [
+        ...new Set(
+          (data.transactions || [])
+            .map((r) => String(r.ticker || '').trim().toUpperCase())
+            .filter(Boolean),
+        ),
+      ]
+      let prices = new Map()
+      try {
+        prices = await fetchLatestPrices(tickers)
+      } catch (priceErr) {
+        console.warn('[dashboard] prices', priceErr)
+      }
       setTransactions(data.transactions)
       setRules(data.rules)
+      setPriceByTicker(prices)
     } catch (err) {
       console.error('[dashboard]', err)
       setError(err.message || 'Nepodařilo se načíst data ze Supabase')
@@ -56,8 +72,8 @@ export function useDashboardData() {
 
   const positions = useMemo(() => {
     const liborTx = filterTransactionsByPortfolio(transactions, 'libor')
-    return computePositions(liborTx, fxMap)
-  }, [transactions, fxMap])
+    return computePositions(liborTx, fxMap, new Date(), priceByTicker)
+  }, [transactions, fxMap, priceByTicker])
   const portfolioValue = useMemo(() => computePortfolioValue(positions), [positions])
   const invested = useMemo(() => computeInvested(positions), [positions])
   const unrealizedPnl = portfolioValue - invested
