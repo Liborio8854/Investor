@@ -50,7 +50,6 @@ export function enrichWatchlistItem(row, priceByTicker = null) {
     price,
     displayCurrency: currency,
     distancePct,
-    absDistance: distancePct == null ? Number.POSITIVE_INFINITY : Math.abs(distancePct),
     signal,
   }
 }
@@ -75,7 +74,11 @@ function resolvePriceEntry(priceByTicker, ticker) {
 export function enrichAndSort(items, priceByTicker = null) {
   return items
     .map((row) => enrichWatchlistItem(row, priceByTicker))
-    .sort((a, b) => a.absDistance - b.absDistance || String(a.ticker).localeCompare(String(b.ticker)))
+    .sort((a, b) => {
+      const da = a.distancePct ?? Number.POSITIVE_INFINITY
+      const db = b.distancePct ?? Number.POSITIVE_INFINITY
+      return da - db || String(a.ticker).localeCompare(String(b.ticker))
+    })
 }
 
 export function filterByStatus(items, status) {
