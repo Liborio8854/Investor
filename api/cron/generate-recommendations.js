@@ -74,6 +74,47 @@ function toCzk(amount, currency) {
   return Number(amount || 0) * rate
 }
 
+/** DIP tickers when `account` is missing on a transaction row. */
+const DIP_TICKERS = new Set(['BRYN.DE', 'SPYI.DE'])
+
+/** Resolve XTB vs DIP: prefer account column, else ticker heuristic. */
+function resolveTxAccount(tx) {
+  const acc = String(tx.account || '')
+    .trim()
+    .toUpperCase()
+  if (acc === 'DIP') return 'DIP'
+  if (acc === 'XTB' || acc === 'FIO') return 'XTB'
+  if (acc) return acc
+  const ticker = normalizeTicker(tx.ticker)
+  return DIP_TICKERS.has(ticker) ? 'DIP' : 'XTB'
+}
+
+/** BUY value in Kč: quantity × price × exchange_rate (fallback FX by currency). */
+function txBuyCzk(tx) {
+  const qty = Number(tx.quantity) || 0
+  const price = Number(tx.price) || 0
+  const er = Number(tx.exchange_rate)
+  if (Number.isFinite(er) && er > 0) return qty * price * er
+  return toCzk(qty * price, tx.currency)
+}
+
+function isDipTicker(ticker) {
+  return DIP_TICKERS.has(normalizeTicker(ticker))
+}
+
+/** SUM of BUY Kč for account since first day of yearMonth (YYYY-MM). */
+function sumMonthlyBuysCzk(transactions, account, yearMonth) {
+  const want = String(account || '').toUpperCase()
+  let sum = 0
+  for (const tx of transactions || []) {
+    if (String(tx.type || '').toUpperCase() !== 'BUY') continue
+    if (!String(tx.date || '').startsWith(yearMonth)) continue
+    if (resolveTxAccount(tx) !== want) continue
+    sum += txBuyCzk(tx)
+  }
+  return sum
+}
+
 function getRuleValue(rules, key, fallback = null) {
   const row = (rules || []).find((r) => r.key === key)
   if (!row || row.value == null || String(row.value).trim() === '') return fallback
@@ -292,7 +333,7 @@ function sumBuysCzk(transactions, predicate) {
   for (const tx of transactions || []) {
     if (String(tx.type || '').toUpperCase() !== 'BUY') continue
     if (!predicate(tx)) continue
-    sum += toCzk(Number(tx.price) * Number(tx.quantity), tx.currency)
+    sum += txBuyCzk(tx)
   }
   return sum
 }
@@ -374,10 +415,16 @@ function buildSystemPrompt({
   allocationNote,
   snoozedTickers,
   limits,
-  remainingMonthlyCzk,
+  xtbInvested,
+  xtbTarget,
+  xtbRemaining,
+  dipInvestedMonth,
+  dipTarget,
+  dipMonthlyNeeded,
   remainingDipCzk,
   totalEquity,
   exitSection,
+  allocationExhausted,
 }) {
   const rulesBlock =
     rules.length > 0
@@ -514,8 +561,16 @@ ${fundBlock}
 
 ALOKACE:
 ${allocationNote}
-Zbývající měsíční alokace (XTB): ${fmtCzk(remainingMonthlyCzk)}
+
+MĚSÍČNÍ ALOKACE - STAV:
+XTB: investováno ${fmtCzk(xtbInvested)} z cíle ${fmtCzk(xtbTarget)}. Zbývá: ${fmtCzk(xtbRemaining)}.
+DIP: investováno ${fmtCzk(dipInvestedMonth)} z ročního cíle ${fmtCzk(dipTarget)}. Měsíční průměr potřebný: ${fmtCzk(dipMonthlyNeeded)}.
 Zbývající DIP alokace (rok): ${fmtCzk(remainingDipCzk)}
+
+Pokud je XTB alokace vyčerpaná (zbývá <= 0), NEDOPORUČUJ žádné BUY na XTB účet.
+Pokud je DIP alokace na dobré cestě (tento měsíc ≥ měsíční průměr, nebo roční cíl splněn), NEDOPORUČUJ extra DIP nákupy (BRYN.DE, SPYI.DE).
+BUY doporučení vždy počítej jen ze zbývající alokace, nikdy nepřekračuj měsíční cíl.
+${allocationExhausted ? 'Obě alokace jsou vyčerpané / na dobré cestě — NEDOPORUČUJ žádné BUY. SUMMARY musí říct přesně: "Měsíční alokace vyčerpaná. Tento měsíc nekupovat."' : ''}
 
 ZTLUMENÉ TICKERY (nealertovat): ${snoozeList}
 Tyto tickery přeskoč v ALERT doporučeních (BUY/WATCH stále může).
@@ -547,7 +602,8 @@ Logika výběru BUY:
 - Pokud je více tickerů v buy zóně, preferuj ten s menší pozicí (%)
 - Pokud je pozice na limitu nebo blízko (>90 % soft limitu), NEKUPUJ — řekni "pozice na limitu"
 - BF-A v buy zóně smí růst až k opportunity limitu (${fmtPctPlain(limits.opportunity)})
-- Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace)
+- Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace XTB)
+- Pokud zbývá XTB alokace ≤ 0, žádná BUY na XTB (včetně MWEQ.DE)
 MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k SPYI.DE. Pokud je sp500_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je S&P 500 P/E nad prahem (PAUZA). Pokud je sp500_status = AKTIVNÍ, MWEQ nedoporučuj (preferuj SPYI.DE dle plánu).
 Priorita nákupů:
 1. Nejdřív value akcie v buy zóně (vzdálenost od cíle < 5 %) — to jsou příležitosti, které nemusí trvat
@@ -565,6 +621,7 @@ SUMMARY (povinné, vždy poslední, priority 99):
 - Krátká česká věta: co dnes koupit (value akcie první, MWEQ jako zbytek alokace)
 - Příklad: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
 - Pokud není nic ke koupi: "Dnes nekupovat — žádný ticker v buy zóně."
+- Pokud je XTB i DIP alokace vyčerpaná / na dobré cestě: "Měsíční alokace vyčerpaná. Tento měsíc nekupovat."
 Nikdy nedoporučuj prodej bez aktivního exit triggeru
 Nikdy nedoporučuj prodej KOMB.PR ani CEZ.PR kvůli překročení limitu`
 }
@@ -744,11 +801,30 @@ async function loadContext(supabase) {
   await migrateDipYearTargetKey(supabase)
 
   const date = todayISO()
+  const txSelectWithRate =
+    'ticker, type, quantity, price, date, created_at, currency, account, exchange_rate'
+  const txSelectBasic =
+    'ticker, type, quantity, price, date, created_at, currency, account'
+
+  let txRes = await supabase
+    .from('inv_transactions')
+    .select(txSelectWithRate)
+    .order('date', { ascending: true })
+
+  if (txRes.error && /exchange_rate/i.test(txRes.error.message || '')) {
+    console.warn(
+      '[cron/generate-recommendations] exchange_rate missing — falling back without it',
+    )
+    txRes = await supabase
+      .from('inv_transactions')
+      .select(txSelectBasic)
+      .order('date', { ascending: true })
+  }
+
   const [
     rulesRes,
     watchRes,
     pricesRes,
-    txRes,
     fundRes,
     usersRes,
     snoozeRes,
@@ -760,10 +836,6 @@ async function loadContext(supabase) {
       .eq('status', 'active')
       .order('ticker'),
     supabase.from('inv_prices').select('ticker, date, price').order('date', { ascending: false }),
-    supabase
-      .from('inv_transactions')
-      .select('ticker, type, quantity, price, date, created_at, currency, account')
-      .order('date', { ascending: true }),
     supabase
       .from('inv_fundamentals')
       .select('ticker, date, roic, roe, net_margin, revenue_growth')
@@ -825,23 +897,23 @@ async function loadContext(supabase) {
   )
   const { holdings, totalEquity } = enrichHoldings(rawHoldings, prices, watchlistByTicker)
 
-  const monthlyTarget = getRuleNumber(rules, 'monthly_xtb', 21000)
-  const monthlyInvested = sumBuysCzk(
-    transactions,
-    (tx) =>
-      String(tx.account || '').toLowerCase() === 'xtb' &&
-      String(tx.date || '').startsWith(ym),
-  )
-  const remainingMonthlyCzk = Math.max(0, monthlyTarget - monthlyInvested)
+  const xtbTarget = getRuleNumber(rules, 'monthly_xtb', 21000)
+  const xtbInvested = sumMonthlyBuysCzk(transactions, 'XTB', ym)
+  const xtbRemaining = Math.max(0, xtbTarget - xtbInvested)
 
   const dipTarget = resolveDipYearTarget(rules, year)
-  const dipInvested = sumBuysCzk(
+  const dipInvestedMonth = sumMonthlyBuysCzk(transactions, 'DIP', ym)
+  const dipInvestedYear = sumBuysCzk(
     transactions,
     (tx) =>
-      String(tx.account || '').toLowerCase() === 'dip' &&
-      String(tx.date || '').startsWith(String(year)),
+      resolveTxAccount(tx) === 'DIP' && String(tx.date || '').startsWith(String(year)),
   )
-  const remainingDipCzk = Math.max(0, dipTarget - dipInvested)
+  const remainingDipCzk = Math.max(0, dipTarget - dipInvestedYear)
+  const dipMonthlyNeeded = dipTarget / 12
+  const dipOnTrack =
+    dipInvestedMonth + 1e-6 >= dipMonthlyNeeded || remainingDipCzk <= 0
+  const xtbExhausted = xtbRemaining <= 0
+  const allocationExhausted = xtbExhausted && dipOnTrack
 
   const snoozedTickers = [
     ...new Set(
@@ -871,8 +943,17 @@ async function loadContext(supabase) {
     allocationNote,
     snoozedTickers,
     limits: getLimitRatios(rules),
-    remainingMonthlyCzk,
+    xtbInvested,
+    xtbTarget,
+    xtbRemaining,
+    remainingMonthlyCzk: xtbRemaining,
+    dipInvestedMonth,
+    dipTarget,
+    dipMonthlyNeeded,
     remainingDipCzk,
+    dipOnTrack,
+    xtbExhausted,
+    allocationExhausted,
     totalEquity,
     exitSection,
     isExitCheckMonth: exitState.isExitCheckMonth,
@@ -937,17 +1018,23 @@ export default async function handler(req, res) {
       allocationNote: ctx.allocationNote,
       snoozedTickers: ctx.snoozedTickers,
       limits: ctx.limits,
-      remainingMonthlyCzk: ctx.remainingMonthlyCzk,
+      xtbInvested: ctx.xtbInvested,
+      xtbTarget: ctx.xtbTarget,
+      xtbRemaining: ctx.xtbRemaining,
+      dipInvestedMonth: ctx.dipInvestedMonth,
+      dipTarget: ctx.dipTarget,
+      dipMonthlyNeeded: ctx.dipMonthlyNeeded,
       remainingDipCzk: ctx.remainingDipCzk,
       totalEquity: ctx.totalEquity,
       exitSection: ctx.exitSection,
+      allocationExhausted: ctx.allocationExhausted,
     })
 
     const userPrompt =
       'Vygeneruj dnešní doporučení podle system instrukcí. Odpověz pouze JSON polem.'
 
     console.log(
-      `[cron/generate-recommendations] watchlist=${ctx.watchlist.length} holdings=${ctx.holdings.size} rules=${ctx.rules.length} snoozed=${ctx.snoozedTickers.length} exitCheck=${ctx.isExitCheckMonth}`,
+      `[cron/generate-recommendations] watchlist=${ctx.watchlist.length} holdings=${ctx.holdings.size} rules=${ctx.rules.length} snoozed=${ctx.snoozedTickers.length} exitCheck=${ctx.isExitCheckMonth} xtb=${Math.round(ctx.xtbInvested)}/${Math.round(ctx.xtbTarget)} dipMonth=${Math.round(ctx.dipInvestedMonth)} dipNeed=${Math.round(ctx.dipMonthlyNeeded)} exhausted=${ctx.allocationExhausted}`,
     )
 
     const { model, text } = await callGemini(apiKey, systemPrompt, userPrompt)
@@ -970,10 +1057,34 @@ export default async function handler(req, res) {
     const snoozedSet = new Set(ctx.snoozedTickers)
     let recommendations = normalizeRecommendations(parsed, date)
       .filter((r) => !(r.type === 'ALERT' && r.ticker && snoozedSet.has(r.ticker)))
+      .filter((r) => {
+        if (r.type !== 'BUY') return true
+        const dip = isDipTicker(r.ticker)
+        if (ctx.xtbExhausted && !dip) return false
+        if (ctx.dipOnTrack && dip) return false
+        return true
+      })
       .map((r) => ({
         ...r,
         user_id: ctx.userId,
       }))
+
+    if (ctx.allocationExhausted) {
+      const withoutBuys = recommendations.filter((r) => r.type !== 'BUY' && r.type !== 'SUMMARY')
+      const summaryMsg = 'Měsíční alokace vyčerpaná. Tento měsíc nekupovat.'
+      recommendations = [
+        ...withoutBuys.slice(0, 5),
+        {
+          date,
+          type: 'SUMMARY',
+          ticker: null,
+          price: null,
+          message: summaryMsg,
+          priority: 99,
+          user_id: ctx.userId,
+        },
+      ]
+    }
 
     if (!recommendations.length) {
       return res.status(502).json({
