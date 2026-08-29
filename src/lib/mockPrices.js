@@ -33,6 +33,11 @@ export const MOCK_PRICES = {
   NOC: { price: 525, currency: 'USD' },
   'NKE.DE': { price: 37.45, currency: 'EUR' },
   'RACE.MI': { price: 342.55, currency: 'EUR' },
+  WM: { price: 230, currency: 'USD' },
+  APH: { price: 160, currency: 'USD' },
+  'AMZ.DE': { price: 205, currency: 'EUR' },
+  PEP: { price: 140, currency: 'USD' },
+  SYK: { price: 320, currency: 'USD' },
 }
 
 /** Hardcoded FX (CZK za 1 jednotku cizí měny) */

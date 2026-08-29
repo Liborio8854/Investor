@@ -51,6 +51,22 @@ export function useWatchlistData() {
   const watched = useMemo(() => filterByStatus(enriched, 'watched'), [enriched])
   const removed = useMemo(() => filterByStatus(enriched, 'removed'), [enriched])
 
+  useEffect(() => {
+    if (loading || !items.length) return
+    console.log(
+      '[watchlist] UI filter — items:',
+      items.length,
+      'active:',
+      active.length,
+      'brk:',
+      brk.length,
+      'watched:',
+      watched.length,
+      'removed:',
+      removed.length,
+    )
+  }, [loading, items, active, brk, watched, removed])
+
   const addItem = useCallback(
     async (payload) => {
       if (!user?.id) throw new Error('Nejste přihlášeni')

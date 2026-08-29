@@ -413,13 +413,49 @@ const WATCHLIST_SELECT =
   'id, created_at, updated_at, user_id, ticker, name, currency, status, notes, isin, target_price, target_t1, target_t2, bf_rating, mos, valuation_method'
 
 export async function fetchWatchlist(userId) {
-  const result = await supabase
-    .from('inv_watchlist')
-    .select(WATCHLIST_SELECT)
-    .eq('user_id', userId)
-    .order('ticker', { ascending: true })
+  const PAGE_SIZE = 1000
+  const all = []
+  let lastError = null
 
-  return assertOk(result, 'inv_watchlist')
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('inv_watchlist')
+      .select('*')
+      .eq('user_id', userId)
+      .order('ticker', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1)
+
+    if (error) {
+      lastError = error
+      console.log(
+        '[watchlist] data:',
+        data?.length,
+        'error:',
+        error,
+        'tickers:',
+        data?.map((d) => d.ticker),
+      )
+      const err = new Error(error.message || 'Chyba při načítání: inv_watchlist')
+      err.code = error.code
+      err.details = error.details
+      throw err
+    }
+
+    const page = data || []
+    all.push(...page)
+    if (page.length < PAGE_SIZE) break
+  }
+
+  console.log(
+    '[watchlist] data:',
+    all.length,
+    'error:',
+    lastError,
+    'tickers:',
+    all.map((d) => d.ticker),
+  )
+
+  return all
 }
 
 export async function insertWatchlistItem(row) {

@@ -17,6 +17,11 @@ export const tickerNames = {
   SOFI: 'SoFi Technologies',
   'BRK-B': 'Berkshire Hathaway B',
   'MWEQ.DE': 'Invesco MSCI World EW',
+  WM: 'Waste Management',
+  APH: 'Amphenol',
+  PEP: 'PepsiCo',
+  SYK: 'Stryker Corporation',
+  'AMZ.DE': 'Amazon.com',
 }
 
 /**

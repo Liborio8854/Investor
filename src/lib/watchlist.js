@@ -81,6 +81,21 @@ export function enrichAndSort(items, priceByTicker = null) {
     })
 }
 
+export function isActiveWatchlistStatus(status) {
+  if (status == null) return true
+  const s = String(status).trim()
+  if (!s) return true
+  return s.toLowerCase() === 'active'
+}
+
+export function normalizeWatchlistStatus(status) {
+  const s = String(status ?? '').trim().toLowerCase()
+  return s || 'active'
+}
+
 export function filterByStatus(items, status) {
-  return items.filter((r) => String(r.status || '').toLowerCase() === status)
+  if (status === 'active') {
+    return items.filter((r) => isActiveWatchlistStatus(r.status))
+  }
+  return items.filter((r) => normalizeWatchlistStatus(r.status) === status)
 }
