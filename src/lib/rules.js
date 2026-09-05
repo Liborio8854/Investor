@@ -23,6 +23,8 @@ export const RULE_SECTIONS = [
       },
       { key: 'dip_frequency', label: 'DIP frekvence', format: 'text', defaultValue: 'Měsíčně' },
       { key: 'allocation_deadline', label: 'Deadline alokace', format: 'day', defaultValue: '25' },
+      { key: 'fx_eur_czk', label: 'Kurz EUR/CZK', format: 'number', defaultValue: '25.3' },
+      { key: 'fx_usd_czk', label: 'Kurz USD/CZK', format: 'number', defaultValue: '23.0' },
     ],
   },
   {

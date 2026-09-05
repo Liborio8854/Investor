@@ -4,7 +4,20 @@ const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'] // primary → fa
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 /** Approximate CZK FX for portfolio weight / allocation context. */
-const DEFAULT_FX = { CZK: 1, EUR: 24.2, USD: 22.0 }
+const DEFAULT_FX = { CZK: 1, EUR: 25.3, USD: 23.0 }
+
+/** Mutable FX map — filled from inv_rules in loadContext. */
+let activeFx = { ...DEFAULT_FX }
+
+function applyFxFromRules(rules) {
+  const map = { ...DEFAULT_FX }
+  const eur = getRuleNumber(rules, 'fx_eur_czk', NaN)
+  const usd = getRuleNumber(rules, 'fx_usd_czk', NaN)
+  if (Number.isFinite(eur) && eur > 0) map.EUR = eur
+  if (Number.isFinite(usd) && usd > 0) map.USD = usd
+  activeFx = map
+  return map
+}
 
 function getAdminClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -70,7 +83,7 @@ function fmtCzk(n) {
 
 function toCzk(amount, currency) {
   const cur = String(currency || 'CZK').toUpperCase()
-  const rate = DEFAULT_FX[cur] ?? 1
+  const rate = activeFx[cur] ?? DEFAULT_FX[cur] ?? 1
   return Number(amount || 0) * rate
 }
 
@@ -89,7 +102,7 @@ function resolveTxAccount(tx) {
   return DIP_TICKERS.has(ticker) ? 'DIP' : 'XTB'
 }
 
-/** BUY value in Kč: quantity × price × exchange_rate (fallback FX by currency). */
+/** BUY value in Kč: quantity × price × exchange_rate (fallback FX by currency / rules). */
 function txBuyCzk(tx) {
   const qty = Number(tx.quantity) || 0
   const price = Number(tx.price) || 0
@@ -887,6 +900,7 @@ async function loadContext(supabase) {
         : `Nesplněno: ${openTasks.length} otevřených úkolů (${openTasks.map((t) => t.title || t.task_type).join(', ')}).`
 
   const rules = rulesRes.data || []
+  applyFxFromRules(rules)
   const transactions = txRes.data || []
   const watchlist = watchRes.data || []
   const prices = latestByTicker(pricesRes.data)

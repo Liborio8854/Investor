@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { fetchLatestPrices, fetchTransactions, fetchWatchlist } from '../lib/api'
-import { DEFAULT_FX } from '../lib/mockPrices'
+import { fetchLatestPrices, fetchRules, fetchTransactions, fetchWatchlist } from '../lib/api'
 import {
+  buildFxMapFromRules,
   computeBrkInfo,
   computeCurrencyExposure,
   computeDividendsTotal,
@@ -24,9 +24,10 @@ export function usePositionsData(accountFilter = 'all', portfolioOwner = 'libor'
   const [error, setError] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [watchlist, setWatchlist] = useState([])
+  const [rules, setRules] = useState([])
   const [priceByTicker, setPriceByTicker] = useState(() => new Map())
 
-  const fxMap = DEFAULT_FX
+  const fxMap = useMemo(() => buildFxMapFromRules(rules), [rules])
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -36,12 +37,14 @@ export function usePositionsData(accountFilter = 'all', portfolioOwner = 'libor'
       if (!user?.id) {
         setTransactions([])
         setWatchlist([])
+        setRules([])
         setPriceByTicker(new Map())
         return
       }
-      const [txs, wl] = await Promise.all([
+      const [txs, wl, rulesData] = await Promise.all([
         fetchTransactions(user.id),
         fetchWatchlist(user.id),
+        fetchRules(user.id),
       ])
       const tickers = [
         ...new Set(
@@ -58,6 +61,7 @@ export function usePositionsData(accountFilter = 'all', portfolioOwner = 'libor'
       }
       setTransactions(txs)
       setWatchlist(wl)
+      setRules(rulesData)
       setPriceByTicker(prices)
     } catch (err) {
       console.error('[positions]', err)

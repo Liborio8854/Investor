@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import {
   deleteTransaction,
   fetchMonthlyTasks,
+  fetchRules,
   fetchTransactions,
   fetchWatchlist,
   insertTransaction,
@@ -10,8 +11,9 @@ import {
   updateTransaction,
 } from '../lib/api'
 import { currentYearMonth, todayISO } from '../lib/format'
-import { DEFAULT_FX } from '../lib/mockPrices'
 import {
+  buyAmountCzk,
+  buildFxMapFromRules,
   computeRealizedTrades,
   filterTransactionsByPortfolio,
   normalizePortfolio,
@@ -79,7 +81,7 @@ export function enrichTransaction(tx, fxMap, realizedById, watchlistNames = {}) 
   const qty = Number(tx.quantity) || 0
   const price = Number(tx.price) || 0
   const fees = Number(tx.fees) || 0
-  const valueCzk = toCzk(qty * price, currency, fxMap)
+  const valueCzk = buyAmountCzk(tx, fxMap)
   const feesCzk = toCzk(fees, currency, fxMap)
   const type = normalizeType(tx.type)
   const realized = type === 'SELL' ? realizedById.get(tx.id) : null
@@ -107,12 +109,13 @@ export function useTransactionsData() {
   const [transactions, setTransactions] = useState([])
   const [tasks, setTasks] = useState([])
   const [watchlist, setWatchlist] = useState([])
+  const [rules, setRules] = useState([])
   const [typeFilter, setTypeFilter] = useState('all')
   const [accountFilter, setAccountFilter] = useState('all')
   const [portfolioFilter, setPortfolioFilter] = useState('libor')
   const [visibleCount, setVisibleCount] = useState(20)
 
-  const fxMap = DEFAULT_FX
+  const fxMap = useMemo(() => buildFxMapFromRules(rules), [rules])
   const ym = currentYearMonth()
 
   const reload = useCallback(
@@ -124,16 +127,19 @@ export function useTransactionsData() {
           setTransactions([])
           setTasks([])
           setWatchlist([])
+          setRules([])
           return
         }
-        const [txs, monthTasks, wl] = await Promise.all([
+        const [txs, monthTasks, wl, rulesData] = await Promise.all([
           fetchTransactions(user.id),
           fetchMonthlyTasks(user.id, ym),
           fetchWatchlist(user.id),
+          fetchRules(user.id),
         ])
         setTransactions(txs)
         setTasks(monthTasks)
         setWatchlist(wl)
+        setRules(rulesData)
       } catch (err) {
         console.error('[transactions]', err)
         setError(err.message || 'Nepodařilo se načíst transakce')
@@ -246,5 +252,6 @@ export function useTransactionsData() {
     removeTransaction,
     completeTask,
     watchlist,
+    fxMap,
   }
 }

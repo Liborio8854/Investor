@@ -2,6 +2,12 @@ import { useState } from 'react'
 import { useTransactionsData } from '../hooks/useTransactionsData'
 import TransactionList from '../components/TransactionList'
 import TransactionModal, { TaskCompleteDialog } from '../components/TransactionModal'
+import TransactionsOverview from '../components/TransactionsOverview'
+
+const VIEW_TABS = [
+  { id: 'list', label: 'Seznam' },
+  { id: 'overview', label: 'Historie' },
+]
 
 const TYPE_TABS = [
   { id: 'all', label: 'Vše' },
@@ -66,8 +72,10 @@ export default function Transactions() {
     removeTransaction,
     completeTask,
     watchlist,
+    fxMap,
   } = useTransactionsData()
 
+  const [view, setView] = useState('list')
   const [modalMode, setModalMode] = useState(null) // 'new' | 'edit'
   const [editTx, setEditTx] = useState(null)
   const [taskPrompt, setTaskPrompt] = useState(null)
@@ -119,69 +127,84 @@ export default function Transactions() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20 text-sm text-[#94a3b8]">
-        Načítám transakce…
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-lg border border-red-100 bg-red-50 p-4 text-sm text-[#dc2626]">
-        <p>{error}</p>
-        <button type="button" onClick={reload} className="mt-2 underline">
-          Zkusit znovu
-        </button>
-      </div>
-    )
-  }
+  const isList = view === 'list'
 
   return (
     <div>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h1 className="text-lg font-semibold text-[#0f172a]">Transakce</h1>
-        <button
-          type="button"
-          onClick={openNew}
-          className="shrink-0 rounded-lg bg-[#2563eb] px-3 py-2 text-sm font-medium text-white"
-        >
-          + Nová transakce
-        </button>
+        {isList && (
+          <button
+            type="button"
+            onClick={openNew}
+            className="shrink-0 rounded-lg bg-[#2563eb] px-3 py-2 text-sm font-medium text-white"
+          >
+            + Nová transakce
+          </button>
+        )}
+      </div>
+
+      <div className="mb-3">
+        <PillTabs tabs={VIEW_TABS} value={view} onChange={setView} />
       </div>
 
       <div className="space-y-2.5">
         <PillTabs tabs={PORTFOLIO_TABS} value={portfolioFilter} onChange={setPortfolioFilter} />
-        <PillTabs tabs={TYPE_TABS} value={typeFilter} onChange={setTypeFilter} />
-        <PillTabs tabs={ACCOUNT_TABS} value={accountFilter} onChange={setAccountFilter} />
+        {isList && (
+          <>
+            <PillTabs tabs={TYPE_TABS} value={typeFilter} onChange={setTypeFilter} />
+            <PillTabs tabs={ACCOUNT_TABS} value={accountFilter} onChange={setAccountFilter} />
+          </>
+        )}
       </div>
 
-      <p className="mt-3 text-xs text-[#94a3b8]">
-        Celkem: {counts.total} transakcí · {counts.BUY} nákupů · {counts.SELL} prodejů ·{' '}
-        {counts.DIVIDEND} dividend
-      </p>
+      {isList ? (
+        loading ? (
+          <div className="flex items-center justify-center py-20 text-sm text-[#94a3b8]">
+            Načítám transakce…
+          </div>
+        ) : error ? (
+          <div className="mt-3 rounded-lg border border-red-100 bg-red-50 p-4 text-sm text-[#dc2626]">
+            <p>{error}</p>
+            <button type="button" onClick={reload} className="mt-2 underline">
+              Zkusit znovu
+            </button>
+          </div>
+        ) : (
+          <>
+            <p className="mt-3 text-xs text-[#94a3b8]">
+              Celkem: {counts.total} transakcí · {counts.BUY} nákupů · {counts.SELL} prodejů ·{' '}
+              {counts.DIVIDEND} dividend
+            </p>
 
-      <section className="mt-2">
-        <TransactionList transactions={transactions} onSelect={openEdit} />
-      </section>
+            <section className="mt-2">
+              <TransactionList transactions={transactions} onSelect={openEdit} />
+            </section>
 
-      {hasMore && (
-        <div className="mt-4 pb-2 text-center">
-          <button
-            type="button"
-            onClick={loadMore}
-            className="rounded-lg border border-[#e2e8f0] px-4 py-2 text-sm font-medium text-[#2563eb] hover:bg-slate-50"
-          >
-            Načíst starší
-          </button>
-        </div>
+            {hasMore && (
+              <div className="mt-4 pb-2 text-center">
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  className="rounded-lg border border-[#e2e8f0] px-4 py-2 text-sm font-medium text-[#2563eb] hover:bg-slate-50"
+                >
+                  Načíst starší
+                </button>
+              </div>
+            )}
+          </>
+        )
+      ) : (
+        <section className="mt-3">
+          <TransactionsOverview portfolioFilter={portfolioFilter} />
+        </section>
       )}
 
       {modalMode && (
         <TransactionModal
           tx={modalMode === 'edit' ? editTx : null}
           watchlist={watchlist}
+          fxMap={fxMap}
           onClose={closeModal}
           onSave={handleSave}
           onDelete={modalMode === 'edit' ? handleDelete : undefined}

@@ -11,26 +11,77 @@ function assertOk(result, label) {
   return result.data || []
 }
 
-export async function fetchTransactions(userId) {
-  const result = await supabase
+const TX_SELECT_WITH_RATE =
+  'id, created_at, user_id, ticker, date, currency, type, notes, price, quantity, fees, account, isin, portfolio, exchange_rate'
+const TX_SELECT_BASIC =
+  'id, created_at, user_id, ticker, date, currency, type, notes, price, quantity, fees, account, isin, portfolio'
+
+async function selectTransactions(userId) {
+  const withRate = await supabase
     .from('inv_transactions')
-    .select(
-      'id, created_at, user_id, ticker, date, currency, type, notes, price, quantity, fees, account, isin, portfolio',
-    )
+    .select(TX_SELECT_WITH_RATE)
     .eq('user_id', userId)
     .order('date', { ascending: true })
     .order('created_at', { ascending: true })
 
-  return assertOk(result, 'inv_transactions')
+  if (!withRate.error) return withRate.data || []
+
+  if (!/exchange_rate/i.test(withRate.error.message || '')) {
+    throw new Error(withRate.error.message || 'Chyba při načítání: inv_transactions')
+  }
+
+  const fallback = await supabase
+    .from('inv_transactions')
+    .select(TX_SELECT_BASIC)
+    .eq('user_id', userId)
+    .order('date', { ascending: true })
+    .order('created_at', { ascending: true })
+
+  return assertOk(fallback, 'inv_transactions')
 }
 
-const TX_SELECT =
-  'id, created_at, user_id, ticker, date, currency, type, notes, price, quantity, fees, account, isin, portfolio'
+export async function fetchTransactions(userId) {
+  return selectTransactions(userId)
+}
+
+/** BUY rows for overview chart/table (frontend aggregation). */
+export async function fetchBuyTransactions(userId) {
+  const withRate = await supabase
+    .from('inv_transactions')
+    .select('date, ticker, quantity, price, exchange_rate, currency, account, portfolio')
+    .eq('user_id', userId)
+    .eq('type', 'BUY')
+    .order('date', { ascending: false })
+
+  if (!withRate.error) return withRate.data || []
+
+  if (!/exchange_rate/i.test(withRate.error.message || '')) {
+    throw new Error(withRate.error.message || 'Chyba při načítání: inv_transactions BUY')
+  }
+
+  const fallback = await supabase
+    .from('inv_transactions')
+    .select('date, ticker, quantity, price, currency, account, portfolio')
+    .eq('user_id', userId)
+    .eq('type', 'BUY')
+    .order('date', { ascending: false })
+
+  return assertOk(fallback, 'inv_transactions BUY')
+}
+
+const TX_SELECT = TX_SELECT_WITH_RATE
 
 export async function insertTransaction(row) {
   const result = await supabase.from('inv_transactions').insert(row).select(TX_SELECT).single()
-  if (result.error) throw result.error
-  return result.data
+  if (!result.error) return result.data
+
+  if (/exchange_rate/i.test(result.error.message || '') && 'exchange_rate' in (row || {})) {
+    const { exchange_rate: _er, ...rest } = row
+    const retry = await supabase.from('inv_transactions').insert(rest).select(TX_SELECT_BASIC).single()
+    if (retry.error) throw retry.error
+    return retry.data
+  }
+  throw result.error
 }
 
 export async function updateTransaction(id, patch) {
@@ -40,8 +91,20 @@ export async function updateTransaction(id, patch) {
     .eq('id', id)
     .select(TX_SELECT)
     .single()
-  if (result.error) throw result.error
-  return result.data
+  if (!result.error) return result.data
+
+  if (/exchange_rate/i.test(result.error.message || '') && 'exchange_rate' in (patch || {})) {
+    const { exchange_rate: _er, ...rest } = patch
+    const retry = await supabase
+      .from('inv_transactions')
+      .update(rest)
+      .eq('id', id)
+      .select(TX_SELECT_BASIC)
+      .single()
+    if (retry.error) throw retry.error
+    return retry.data
+  }
+  throw result.error
 }
 
 export async function deleteTransaction(id) {

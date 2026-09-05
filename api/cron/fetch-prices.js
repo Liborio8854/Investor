@@ -285,6 +285,36 @@ async function updateMarketIndicators(supabase, yahooStats, errors) {
   return out
 }
 
+/** EUR/CZK + USD/CZK from Yahoo → inv_rules fx_eur_czk / fx_usd_czk */
+async function updateCzkFxRates(supabase, yahooStats, errors, fxCache) {
+  const out = { eur: null, usd: null }
+
+  for (const [from, ruleKey, outKey] of [
+    ['EUR', 'fx_eur_czk', 'eur'],
+    ['USD', 'fx_usd_czk', 'usd'],
+  ]) {
+    try {
+      const rate = await getFxRate(from, 'CZK', fxCache, yahooStats)
+      if (rate == null || !Number.isFinite(Number(rate)) || Number(rate) <= 0) {
+        errors.push({ type: 'fx_czk_empty', pair: `${from}CZK` })
+        console.error(`[cron/fetch-prices] ${from}CZK rate empty`)
+      } else {
+        const str = Number(rate).toFixed(4)
+        await setRuleValue(supabase, ruleKey, str)
+        out[outKey] = str
+        console.log(`[cron/fetch-prices] ${ruleKey}=`, str)
+      }
+      await sleep(200)
+    } catch (err) {
+      yahooStats.failed += 1
+      errors.push({ type: 'fx_czk', pair: `${from}CZK`, error: err.message })
+      console.error(`[cron/fetch-prices] ${from}CZK failed`, err.message)
+    }
+  }
+
+  return out
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -411,6 +441,7 @@ export default async function handler(req, res) {
     }
 
     const marketIndicators = await updateMarketIndicators(supabase, yahooStats, errors)
+    const czkFx = await updateCzkFxRates(supabase, yahooStats, errors, fxCache)
 
     const result = {
       ok: true,
@@ -420,6 +451,7 @@ export default async function handler(req, res) {
       fundamentalsUpserted,
       fundamentalsRun: fetchFundamentals,
       marketIndicators,
+      czkFx,
       yahooCallsOk: yahooStats.ok,
       yahooCallsFailed: yahooStats.failed,
       fxCached: [...fxCache.keys()],

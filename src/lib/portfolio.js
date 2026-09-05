@@ -17,10 +17,40 @@ export function buildFxMap(fxRows = []) {
   return map
 }
 
+/** FX map from inv_rules keys fx_eur_czk / fx_usd_czk (fallback DEFAULT_FX). */
+export function buildFxMapFromRules(rules = []) {
+  const map = { ...DEFAULT_FX }
+  const eur = parseRuleNumber(rules, 'fx_eur_czk', NaN)
+  const usd = parseRuleNumber(rules, 'fx_usd_czk', NaN)
+  if (Number.isFinite(eur) && eur > 0) map.EUR = eur
+  if (Number.isFinite(usd) && usd > 0) map.USD = usd
+  return map
+}
+
+/** CZK per 1 unit of currency (for form prefills). */
+export function resolveExchangeRate(currency, fxMap = DEFAULT_FX) {
+  const cur = String(currency || 'CZK').toUpperCase()
+  if (cur === 'CZK') return 1
+  const rate = fxMap[cur] ?? DEFAULT_FX[cur] ?? 1
+  return Number.isFinite(rate) && rate > 0 ? rate : 1
+}
+
 export function toCzk(amount, currency, fxMap) {
   const cur = String(currency || 'CZK').toUpperCase()
-  const rate = fxMap[cur] ?? DEFAULT_FX[cur] ?? 1
+  const rate = fxMap?.[cur] ?? DEFAULT_FX[cur] ?? 1
   return Number(amount || 0) * rate
+}
+
+/**
+ * Transaction notional in Kč.
+ * Prefer per-tx exchange_rate; else currency × fxMap (rules / DEFAULT_FX).
+ */
+export function buyAmountCzk(tx, fxMap = DEFAULT_FX) {
+  const qty = Number(tx?.quantity) || 0
+  const price = Number(tx?.price) || 0
+  const er = Number(tx?.exchange_rate)
+  if (Number.isFinite(er) && er > 0) return qty * price * er
+  return toCzk(qty * price, tx?.currency, fxMap)
 }
 
 function normalizeTicker(ticker) {
@@ -457,7 +487,7 @@ export function sumRealizedPnl(realized) {
   return realized.reduce((s, t) => s + t.pnlCzk, 0)
 }
 
-/** XTB monthly allocated: SUM(price×qty) BUY in current month, account=xtb (native currency sum — typically CZK/EUR as stored) */
+/** XTB monthly allocated: SUM BUY Kč in current month, account=xtb */
 export function computeMonthlyXtbAllocated(transactions, yearMonth, fxMap) {
   return transactions
     .filter(
@@ -466,13 +496,10 @@ export function computeMonthlyXtbAllocated(transactions, yearMonth, fxMap) {
         String(tx.account || '').toLowerCase() === 'xtb' &&
         String(tx.date || '').startsWith(yearMonth),
     )
-    .reduce((s, tx) => {
-      const cur = String(tx.currency || 'CZK').toUpperCase()
-      return s + toCzk(Number(tx.price) * Number(tx.quantity), cur, fxMap)
-    }, 0)
+    .reduce((s, tx) => s + buyAmountCzk(tx, fxMap), 0)
 }
 
-/** DIP yearly invested 2026 */
+/** DIP yearly invested */
 export function computeDipYearInvested(transactions, year, fxMap) {
   return transactions
     .filter(
@@ -481,10 +508,7 @@ export function computeDipYearInvested(transactions, year, fxMap) {
         String(tx.account || '').toLowerCase() === 'dip' &&
         String(tx.date || '').startsWith(String(year)),
     )
-    .reduce((s, tx) => {
-      const cur = String(tx.currency || 'CZK').toUpperCase()
-      return s + toCzk(Number(tx.price) * Number(tx.quantity), cur, fxMap)
-    }, 0)
+    .reduce((s, tx) => s + buyAmountCzk(tx, fxMap), 0)
 }
 
 export function dipBuyHistory(transactions, year, fxMap) {
@@ -503,11 +527,7 @@ export function dipBuyHistory(transactions, year, fxMap) {
       quantity: Number(tx.quantity) || 0,
       price: Number(tx.price) || 0,
       currency: String(tx.currency || 'CZK').toUpperCase(),
-      valueCzk: toCzk(
-        Number(tx.price) * Number(tx.quantity),
-        tx.currency,
-        fxMap,
-      ),
+      valueCzk: buyAmountCzk(tx, fxMap),
     }))
 }
 

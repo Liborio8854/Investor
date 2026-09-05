@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { todayISO } from '../lib/format'
+import { DEFAULT_FX } from '../lib/mockPrices'
+import { resolveExchangeRate } from '../lib/portfolio'
 
 const inputClass =
   'mt-1 w-full rounded-lg border border-[#e2e8f0] px-3 py-2 text-sm text-[#0f172a] outline-none focus:border-[#2563eb]'
@@ -27,7 +29,14 @@ const CURRENCY_OPTIONS = ['CZK', 'EUR', 'USD']
 /** XTB přípony, které Yahoo nepoužívá — oříznout. */
 const STRIP_SUFFIXES = ['.US', '.UK', '.NL', '.FR']
 
-function emptyForm() {
+function rateToForm(rate) {
+  if (rate == null || !Number.isFinite(Number(rate))) return ''
+  const n = Number(rate)
+  return String(Number(n.toFixed(4)))
+}
+
+function emptyForm(fxMap = DEFAULT_FX) {
+  const currency = 'EUR'
   return {
     portfolio: 'libor',
     type: 'BUY',
@@ -36,14 +45,19 @@ function emptyForm() {
     date: todayISO(),
     quantity: '',
     price: '',
-    currency: 'EUR',
+    currency,
+    exchange_rate: rateToForm(resolveExchangeRate(currency, fxMap)),
     fees: '0',
     notes: '',
   }
 }
 
-function fromTx(tx) {
+function fromTx(tx, fxMap = DEFAULT_FX) {
   const p = String(tx.portfolio || 'libor').trim().toLowerCase()
+  const currency = String(tx.currency || 'CZK').toUpperCase()
+  const er = Number(tx.exchange_rate)
+  const rate =
+    Number.isFinite(er) && er > 0 ? er : resolveExchangeRate(currency, fxMap)
   return {
     portfolio: p === 'eda' ? 'eda' : 'libor',
     type: String(tx.type || 'BUY').toUpperCase(),
@@ -52,7 +66,8 @@ function fromTx(tx) {
     date: String(tx.date || todayISO()).slice(0, 10),
     quantity: tx.quantity != null ? String(tx.quantity) : '',
     price: tx.price != null ? String(tx.price) : '',
-    currency: String(tx.currency || 'CZK').toUpperCase(),
+    currency,
+    exchange_rate: rateToForm(rate),
     fees: tx.fees != null ? String(tx.fees) : '0',
     notes: tx.notes || '',
   }
@@ -70,8 +85,13 @@ export function normalizeTickerInput(raw) {
   return { ticker, stripped: null }
 }
 
-function toPayload(form) {
+function toPayload(form, fxMap = DEFAULT_FX) {
   const { ticker } = normalizeTickerInput(form.ticker)
+  const currency = String(form.currency || 'CZK').toUpperCase()
+  let er = Number(form.exchange_rate)
+  if (!Number.isFinite(er) || er <= 0) {
+    er = resolveExchangeRate(currency, fxMap)
+  }
   return {
     portfolio: form.portfolio,
     type: form.type,
@@ -80,7 +100,8 @@ function toPayload(form) {
     date: form.date,
     quantity: Number(form.quantity),
     price: Number(form.price),
-    currency: form.currency,
+    currency,
+    exchange_rate: er,
     fees: form.fees === '' ? 0 : Number(form.fees),
     notes: form.notes.trim() || null,
   }
@@ -115,9 +136,16 @@ function ModalShell({ title, onClose, children, footer }) {
   )
 }
 
-export default function TransactionModal({ tx, watchlist = [], onClose, onSave, onDelete }) {
+export default function TransactionModal({
+  tx,
+  watchlist = [],
+  fxMap = DEFAULT_FX,
+  onClose,
+  onSave,
+  onDelete,
+}) {
   const isEdit = Boolean(tx)
-  const [form, setForm] = useState(() => (tx ? fromTx(tx) : emptyForm()))
+  const [form, setForm] = useState(() => (tx ? fromTx(tx, fxMap) : emptyForm(fxMap)))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const [strippedSuffix, setStrippedSuffix] = useState(null)
@@ -135,12 +163,21 @@ export default function TransactionModal({ tx, watchlist = [], onClose, onSave, 
   const unknownTicker = Boolean(tickerKey && watchlistTickers.size > 0 && !watchlistTickers.has(tickerKey))
 
   useEffect(() => {
-    setForm(tx ? fromTx(tx) : emptyForm())
+    setForm(tx ? fromTx(tx, fxMap) : emptyForm(fxMap))
     setErr(null)
     setStrippedSuffix(null)
-  }, [tx])
+  }, [tx, fxMap])
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
+
+  const handleCurrencyChange = (e) => {
+    const currency = e.target.value
+    setForm((f) => ({
+      ...f,
+      currency,
+      exchange_rate: rateToForm(resolveExchangeRate(currency, fxMap)),
+    }))
+  }
 
   const handleTickerChange = (e) => {
     const { ticker, stripped } = normalizeTickerInput(e.target.value)
@@ -170,7 +207,7 @@ export default function TransactionModal({ tx, watchlist = [], onClose, onSave, 
 
     setBusy(true)
     try {
-      await onSave(toPayload(form))
+      await onSave(toPayload(form, fxMap))
     } catch (ex) {
       setErr(ex.message || 'Uložení selhalo')
       setBusy(false)
@@ -328,7 +365,7 @@ export default function TransactionModal({ tx, watchlist = [], onClose, onSave, 
         <div className="grid grid-cols-2 gap-3">
           <label className={labelClass}>
             Měna
-            <select className={inputClass} value={form.currency} onChange={set('currency')}>
+            <select className={inputClass} value={form.currency} onChange={handleCurrencyChange}>
               {CURRENCY_OPTIONS.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -337,17 +374,30 @@ export default function TransactionModal({ tx, watchlist = [], onClose, onSave, 
             </select>
           </label>
           <label className={labelClass}>
-            {form.type === 'DIVIDEND' ? 'Daň' : 'Poplatek'}
+            Kurz
             <input
               className={inputClass}
               type="number"
               step="any"
               min="0"
-              value={form.fees}
-              onChange={set('fees')}
+              value={form.exchange_rate}
+              onChange={set('exchange_rate')}
+              title="Kč za 1 jednotku měny transakce"
             />
           </label>
         </div>
+
+        <label className={labelClass}>
+          {form.type === 'DIVIDEND' ? 'Daň' : 'Poplatek'}
+          <input
+            className={inputClass}
+            type="number"
+            step="any"
+            min="0"
+            value={form.fees}
+            onChange={set('fees')}
+          />
+        </label>
 
         <label className={labelClass}>
           Poznámka

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { fetchDashboardData, fetchLatestPrices } from '../lib/api'
 import { currentYearMonth } from '../lib/format'
-import { DEFAULT_FX } from '../lib/mockPrices'
 import {
+  buildFxMapFromRules,
   computeCurrencyExposure,
   computeDipYearInvested,
   computeInvested,
@@ -27,7 +27,7 @@ export function useDashboardData() {
   const [priceByTicker, setPriceByTicker] = useState(() => new Map())
 
   const ym = currentYearMonth()
-  const fxMap = DEFAULT_FX
+  const fxMap = useMemo(() => buildFxMapFromRules(rules), [rules])
 
   const reload = useCallback(async () => {
     setLoading(true)

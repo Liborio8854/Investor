@@ -40,11 +40,11 @@ export const MOCK_PRICES = {
   SYK: { price: 320, currency: 'USD' },
 }
 
-/** Hardcoded FX (CZK za 1 jednotku cizí měny) */
+/** Hardcoded FX (CZK za 1 jednotku cizí měny) — fallback když chybí inv_rules */
 export const DEFAULT_FX = {
   CZK: 1,
-  EUR: 24.2,
-  USD: 22.0,
+  EUR: 25.3,
+  USD: 23.0,
 }
 
 const ALIASES = {
