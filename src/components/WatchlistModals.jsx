@@ -159,6 +159,7 @@ export function WatchlistAddModal({ onClose, onSave }) {
 
 export function WatchlistEditModal({ item, onClose, onSave }) {
   const [form, setForm] = useState({
+    ticker: '',
     target_price: '',
     target_t1: '',
     target_t2: '',
@@ -172,6 +173,7 @@ export function WatchlistEditModal({ item, onClose, onSave }) {
   useEffect(() => {
     if (!item) return
     setForm({
+      ticker: item.ticker ?? '',
       target_price: item.target_price ?? '',
       target_t1: item.target_t1 ?? '',
       target_t2: item.target_t2 ?? '',
@@ -183,12 +185,31 @@ export function WatchlistEditModal({ item, onClose, onSave }) {
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
+  const handleTickerChange = (e) => {
+    setForm((f) => ({ ...f, ticker: e.target.value.toUpperCase() }))
+  }
+
   const submit = async (e) => {
     e.preventDefault()
     setErr(null)
+    const ticker = String(form.ticker || '').trim().toUpperCase()
+    if (!ticker) {
+      setErr('Ticker je povinný')
+      return
+    }
+
+    const originalTicker = String(item.ticker || '').trim().toUpperCase()
+    if (ticker !== originalTicker) {
+      const ok = window.confirm(
+        'Změna tickeru ovlivní napojení na ceny a transakce. Pokračovat?',
+      )
+      if (!ok) return
+    }
+
     setBusy(true)
     try {
       await onSave(item.id, {
+        ticker,
         target_price: numOrNull(form.target_price),
         target_t1: numOrNull(form.target_t1),
         target_t2: numOrNull(form.target_t2),
@@ -206,9 +227,11 @@ export function WatchlistEditModal({ item, onClose, onSave }) {
 
   if (!item) return null
 
+  const titleTicker = String(form.ticker || item.ticker || '').trim().toUpperCase() || item.ticker
+
   return (
     <ModalShell
-      title={`${item.ticker}${item.name ? ` — ${item.name}` : ''}`}
+      title={`${titleTicker}${item.name ? ` — ${item.name}` : ''}`}
       onClose={onClose}
       footer={
         <div className="flex gap-2">
@@ -232,6 +255,17 @@ export function WatchlistEditModal({ item, onClose, onSave }) {
     >
       <form id="watchlist-edit-form" onSubmit={submit} className="space-y-3">
         {err && <p className="text-sm text-[#dc2626]">{err}</p>}
+        <label className={labelClass}>
+          Ticker *
+          <input
+            className={inputClass}
+            value={form.ticker}
+            onChange={handleTickerChange}
+            required
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
         <div className="grid grid-cols-3 gap-3">
           <label className={labelClass}>
             Cíl
