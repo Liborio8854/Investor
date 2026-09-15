@@ -58,6 +58,7 @@ export default function Transactions() {
     error,
     reload,
     transactions,
+    allTransactions,
     hasMore,
     loadMore,
     counts,
@@ -204,6 +205,7 @@ export default function Transactions() {
         <TransactionModal
           tx={modalMode === 'edit' ? editTx : null}
           watchlist={watchlist}
+          transactions={allTransactions}
           fxMap={fxMap}
           onClose={closeModal}
           onSave={handleSave}

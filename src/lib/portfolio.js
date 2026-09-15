@@ -98,15 +98,40 @@ export function filterTransactionsByPortfolio(transactions, portfolio = 'libor')
   return transactions.filter((tx) => normalizePortfolio(tx.portfolio) === want)
 }
 
-/** Filter tabs: all | xtb_fio | dip */
+/** Filter tabs: all | xtb_fio | dip | xtb | fio */
 export function filterTransactionsByAccount(transactions, accountFilter = 'all') {
   if (accountFilter === 'all') return transactions
   return transactions.filter((tx) => {
     const acc = String(tx.account || '').toLowerCase()
     if (accountFilter === 'xtb_fio') return acc === 'xtb' || acc === 'fio'
     if (accountFilter === 'dip') return acc === 'dip'
+    if (accountFilter === 'xtb' || accountFilter === 'fio') return acc === accountFilter
     return true
   })
+}
+
+/**
+ * Tickers with open position: SUM(BUY qty) − SUM(SELL qty) > 0.
+ * @param {object[]} transactions
+ * @param {{ excludeId?: string|number|null }} [opts] — při editaci SELL vyloučit aktuální řádek
+ * @returns {string[]} sorted uppercase tickers
+ */
+export function openPositionTickers(transactions, { excludeId = null } = {}) {
+  const qtyByTicker = new Map()
+  for (const tx of transactions || []) {
+    if (excludeId != null && tx.id === excludeId) continue
+    const type = String(tx.type || '').toUpperCase()
+    if (type !== 'BUY' && type !== 'SELL') continue
+    const ticker = normalizeTicker(tx.ticker)
+    if (!ticker) continue
+    const qty = Number(tx.quantity) || 0
+    const prev = qtyByTicker.get(ticker) || 0
+    qtyByTicker.set(ticker, type === 'BUY' ? prev + qty : prev - qty)
+  }
+  return [...qtyByTicker.entries()]
+    .filter(([, qty]) => qty > 1e-9)
+    .map(([ticker]) => ticker)
+    .sort((a, b) => a.localeCompare(b))
 }
 
 function parseDateOnly(dateStr) {

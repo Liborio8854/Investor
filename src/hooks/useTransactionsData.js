@@ -237,6 +237,8 @@ export function useTransactionsData() {
     error,
     reload,
     transactions: visible,
+    /** Všechny transakce uživatele (pro výpočet otevřených pozic v modalu). */
+    allTransactions: transactions,
     allFilteredCount: enriched.length,
     hasMore,
     loadMore,

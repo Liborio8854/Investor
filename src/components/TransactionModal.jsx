@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { todayISO } from '../lib/format'
 import { DEFAULT_FX } from '../lib/mockPrices'
-import { resolveExchangeRate } from '../lib/portfolio'
+import {
+  filterTransactionsByAccount,
+  filterTransactionsByPortfolio,
+  openPositionTickers,
+  resolveExchangeRate,
+} from '../lib/portfolio'
 
 const inputClass =
   'mt-1 w-full rounded-lg border border-[#e2e8f0] px-3 py-2 text-sm text-[#0f172a] outline-none focus:border-[#2563eb]'
@@ -139,16 +144,21 @@ function ModalShell({ title, onClose, children, footer }) {
 export default function TransactionModal({
   tx,
   watchlist = [],
+  transactions = [],
   fxMap = DEFAULT_FX,
   onClose,
   onSave,
   onDelete,
 }) {
   const isEdit = Boolean(tx)
+  const sellDatalistId = useId()
   const [form, setForm] = useState(() => (tx ? fromTx(tx, fxMap) : emptyForm(fxMap)))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
   const [strippedSuffix, setStrippedSuffix] = useState(null)
+
+  const isSell = String(form.type || '').toUpperCase() === 'SELL'
+  const isBuy = String(form.type || '').toUpperCase() === 'BUY'
 
   const watchlistTickers = useMemo(() => {
     const set = new Set()
@@ -159,8 +169,24 @@ export default function TransactionModal({
     return set
   }, [watchlist])
 
+  /** Otevřené pozice pro zvolené portfolio + účet (SELL autocomplete / validace). */
+  const positionTickers = useMemo(() => {
+    const scoped = filterTransactionsByAccount(
+      filterTransactionsByPortfolio(transactions, form.portfolio),
+      form.account,
+    )
+    return openPositionTickers(scoped, { excludeId: isEdit && isSell ? tx?.id : null })
+  }, [transactions, form.portfolio, form.account, isEdit, isSell, tx?.id])
+
+  const positionTickerSet = useMemo(() => new Set(positionTickers), [positionTickers])
+
   const tickerKey = String(form.ticker || '').trim().toUpperCase()
-  const unknownTicker = Boolean(tickerKey && watchlistTickers.size > 0 && !watchlistTickers.has(tickerKey))
+  const unknownTicker = Boolean(
+    tickerKey &&
+      (isSell
+        ? !positionTickerSet.has(tickerKey)
+        : isBuy && watchlistTickers.size > 0 && !watchlistTickers.has(tickerKey)),
+  )
 
   useEffect(() => {
     setForm(tx ? fromTx(tx, fxMap) : emptyForm(fxMap))
@@ -190,6 +216,10 @@ export default function TransactionModal({
     setErr(null)
     if (!form.ticker.trim()) {
       setErr('Ticker je povinný')
+      return
+    }
+    if (isSell && !positionTickerSet.has(tickerKey)) {
+      setErr('Ticker nemá otevřenou pozici v tomto portfoliu a účtu')
       return
     }
     if (!form.date) {
@@ -316,16 +346,32 @@ export default function TransactionModal({
               required
               autoComplete="off"
               spellCheck={false}
+              list={isSell ? sellDatalistId : undefined}
+              placeholder={isSell ? 'Vyber z otevřených pozic…' : undefined}
             />
           </label>
+          {isSell && (
+            <datalist id={sellDatalistId}>
+              {positionTickers.map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
+          )}
           {strippedSuffix && (
             <p className="mt-1 text-xs text-[#2563eb]">
               Přípona {strippedSuffix} odstraněna — používáme Yahoo formát.
             </p>
           )}
-          {unknownTicker && (
+          {unknownTicker && isBuy && (
             <p className="mt-1 text-xs text-amber-700">
               Ticker není ve watchlistu. Zkontroluj formát (např. RYAAY, ne RYAAY.US).
+            </p>
+          )}
+          {unknownTicker && isSell && (
+            <p className="mt-1 text-xs text-amber-700">
+              {positionTickers.length === 0
+                ? 'Žádná otevřená pozice pro zvolené portfolio a účet.'
+                : 'Ticker nemá otevřenou pozici. Vyber z nabídky nebo zkontroluj portfolio/účet.'}
             </p>
           )}
         </div>
