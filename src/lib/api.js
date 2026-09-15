@@ -539,3 +539,9 @@ export async function updateWatchlistItem(id, patch) {
   if (result.error) throw result.error
   return result.data
 }
+
+/** Trvalé smazání řádku watchlistu. Nesahá na inv_prices / inv_transactions. */
+export async function deleteWatchlistItem(id) {
+  const result = await supabase.from('inv_watchlist').delete().eq('id', id)
+  if (result.error) throw result.error
+}

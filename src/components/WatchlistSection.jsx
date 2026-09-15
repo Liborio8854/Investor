@@ -7,6 +7,7 @@ export default function WatchlistSection({
   defaultOpen = false,
   onRowClick,
   onRemove,
+  onDelete,
   rowAction,
 }) {
   const [open, setOpen] = useState(defaultOpen)
@@ -28,6 +29,7 @@ export default function WatchlistSection({
             rows={rows}
             onRowClick={onRowClick}
             onRemove={onRemove}
+            onDelete={onDelete}
             rowAction={rowAction}
             emptyText="Žádné tituly v této sekci"
           />

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { fetchLatestPrices, fetchWatchlist, insertWatchlistItem, updateWatchlistItem } from '../lib/api'
+import {
+  deleteWatchlistItem,
+  fetchLatestPrices,
+  fetchWatchlist,
+  insertWatchlistItem,
+  updateWatchlistItem,
+} from '../lib/api'
 import { enrichAndSort, filterByStatus } from '../lib/watchlist'
 
 export function useWatchlistData() {
@@ -92,6 +98,14 @@ export function useWatchlistData() {
     [reload],
   )
 
+  const hardDelete = useCallback(
+    async (id) => {
+      await deleteWatchlistItem(id)
+      await reload({ silent: true })
+    },
+    [reload],
+  )
+
   return {
     loading,
     error,
@@ -103,5 +117,6 @@ export function useWatchlistData() {
     addItem,
     updateItem,
     softRemove,
+    hardDelete,
   }
 }

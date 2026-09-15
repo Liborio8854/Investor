@@ -4,7 +4,7 @@ import WatchlistTable from '../components/WatchlistTable'
 import WatchlistSection from '../components/WatchlistSection'
 import { WatchlistAddModal, WatchlistEditModal } from '../components/WatchlistModals'
 
-function ConfirmDialog({ message, onConfirm, onCancel, busy }) {
+function ConfirmDialog({ message, confirmLabel = 'Ano', onConfirm, onCancel, busy }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <button type="button" className="absolute inset-0 cursor-default" aria-label="Zavřít" onClick={onCancel} />
@@ -25,7 +25,7 @@ function ConfirmDialog({ message, onConfirm, onCancel, busy }) {
             onClick={onConfirm}
             className="flex-1 rounded-lg bg-[#dc2626] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {busy ? '…' : 'Ano'}
+            {busy ? '…' : confirmLabel}
           </button>
         </div>
       </div>
@@ -34,12 +34,24 @@ function ConfirmDialog({ message, onConfirm, onCancel, busy }) {
 }
 
 export default function Watchlist() {
-  const { loading, error, reload, active, brk, watched, removed, addItem, updateItem, softRemove } =
-    useWatchlistData()
+  const {
+    loading,
+    error,
+    reload,
+    active,
+    brk,
+    watched,
+    removed,
+    addItem,
+    updateItem,
+    softRemove,
+    hardDelete,
+  } = useWatchlistData()
   const [addOpen, setAddOpen] = useState(false)
   const [editItem, setEditItem] = useState(null)
   const [removeTarget, setRemoveTarget] = useState(null)
-  const [removeBusy, setRemoveBusy] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [actionBusy, setActionBusy] = useState(false)
 
   const handleRemoveRequest = (row) => {
     setRemoveTarget(row)
@@ -47,14 +59,32 @@ export default function Watchlist() {
 
   const handleRemoveConfirm = async () => {
     if (!removeTarget) return
-    setRemoveBusy(true)
+    setActionBusy(true)
     try {
       await softRemove(removeTarget.id)
       setRemoveTarget(null)
     } catch (err) {
       alert(err.message || 'Nepodařilo se vyřadit')
     } finally {
-      setRemoveBusy(false)
+      setActionBusy(false)
+    }
+  }
+
+  const handleDeleteRequest = (row) => {
+    setDeleteTarget(row)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return
+    setActionBusy(true)
+    try {
+      await hardDelete(deleteTarget.id)
+      setDeleteTarget(null)
+      if (editItem?.id === deleteTarget.id) setEditItem(null)
+    } catch (err) {
+      alert(err.message || 'Nepodařilo se smazat')
+    } finally {
+      setActionBusy(false)
     }
   }
 
@@ -126,6 +156,7 @@ export default function Watchlist() {
         rows={removed}
         onRowClick={setEditItem}
         rowAction={restoreAction}
+        onDelete={handleDeleteRequest}
       />
 
       {addOpen && <WatchlistAddModal onClose={() => setAddOpen(false)} onSave={addItem} />}
@@ -135,9 +166,18 @@ export default function Watchlist() {
       {removeTarget && (
         <ConfirmDialog
           message={`Přesunout ${removeTarget.ticker} do vyřazených?`}
-          onCancel={() => !removeBusy && setRemoveTarget(null)}
+          onCancel={() => !actionBusy && setRemoveTarget(null)}
           onConfirm={handleRemoveConfirm}
-          busy={removeBusy}
+          busy={actionBusy}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmDialog
+          message={`Opravdu smazat ${deleteTarget.ticker} z watchlistu? Tato akce je nevratná.`}
+          confirmLabel="Smazat"
+          onCancel={() => !actionBusy && setDeleteTarget(null)}
+          onConfirm={handleDeleteConfirm}
+          busy={actionBusy}
         />
       )}
     </div>

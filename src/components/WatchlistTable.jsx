@@ -13,10 +13,32 @@ function fmtDist(n) {
   return `${sign}${abs} %`
 }
 
+function TrashIcon({ className }) {
+  return (
+    <svg
+      className={className}
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  )
+}
+
 export default function WatchlistTable({
   rows,
   onRowClick,
   onRemove,
+  onDelete,
   rowAction,
   emptyText = 'Žádné tituly',
 }) {
@@ -25,7 +47,9 @@ export default function WatchlistTable({
   }
 
   const showRemove = Boolean(onRemove)
+  const showDelete = Boolean(onDelete)
   const showRestore = Boolean(rowAction)
+  const showActions = showRemove || showRestore || showDelete
 
   return (
     <div className="w-full overflow-x-auto">
@@ -38,7 +62,7 @@ export default function WatchlistTable({
             <th className="pb-2 pr-1 text-right font-medium">Cíl</th>
             <th className="pb-2 pr-1 text-right font-medium">Vzdál.</th>
             <th className="pb-2 pl-1 font-medium" />
-            {(showRemove || showRestore) && <th className="pb-2 font-medium" />}
+            {showActions && <th className="pb-2 font-medium" />}
           </tr>
         </thead>
         <tbody>
@@ -83,34 +107,50 @@ export default function WatchlistTable({
                   {row.signal?.emoji ?? '⚪'}
                 </span>
               </td>
-              {(showRemove || showRestore) && (
+              {showActions && (
                 <td className="py-2 pl-2 align-middle">
-                  {showRemove && (
-                    <button
-                      type="button"
-                      title="Přesunout do vyřazených"
-                      aria-label={`Přesunout ${row.ticker} do vyřazených`}
-                      className="text-[14px] leading-none text-[#cbd5e1] transition-colors hover:text-[#dc2626]"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onRemove(row)
-                      }}
-                    >
-                      ✕
-                    </button>
-                  )}
-                  {showRestore && (
-                    <button
-                      type="button"
-                      className="whitespace-nowrap text-[12px] font-medium leading-none text-[#2563eb] hover:underline"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        rowAction.onClick(row)
-                      }}
-                    >
-                      {rowAction.label}
-                    </button>
-                  )}
+                  <div className="flex items-center justify-end gap-2">
+                    {showRestore && (
+                      <button
+                        type="button"
+                        className="whitespace-nowrap text-[12px] font-medium leading-none text-[#2563eb] hover:underline"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          rowAction.onClick(row)
+                        }}
+                      >
+                        {rowAction.label}
+                      </button>
+                    )}
+                    {showRemove && (
+                      <button
+                        type="button"
+                        title="Přesunout do vyřazených"
+                        aria-label={`Přesunout ${row.ticker} do vyřazených`}
+                        className="text-[14px] leading-none text-[#cbd5e1] transition-colors hover:text-[#dc2626]"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onRemove(row)
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                    {showDelete && (
+                      <button
+                        type="button"
+                        title="Trvale smazat"
+                        aria-label={`Trvale smazat ${row.ticker} z watchlistu`}
+                        className="text-[#cbd5e1] transition-colors hover:text-[#dc2626]"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onDelete(row)
+                        }}
+                      >
+                        <TrashIcon />
+                      </button>
+                    )}
+                  </div>
                 </td>
               )}
             </tr>
