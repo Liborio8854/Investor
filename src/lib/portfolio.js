@@ -1,4 +1,7 @@
 import { DEFAULT_FX } from './mockPrices'
+import { fifoLotsByTicker, nativeWeightedAverage } from './nativeHoldings.js'
+
+export { computeNativeHoldings, fifoLotsByTicker, nativeWeightedAverage } from './nativeHoldings.js'
 
 /**
  * Build FX map: currency -> CZK rate from inv_fx_rates rows ({ pair, rate, date })
@@ -51,6 +54,22 @@ export function buyAmountCzk(tx, fxMap = DEFAULT_FX) {
   const er = Number(tx?.exchange_rate)
   if (Number.isFinite(er) && er > 0) return qty * price * er
   return toCzk(qty * price, tx?.currency, fxMap)
+}
+
+/**
+ * BUY − SELL cashflow in Kč. `allocated` is net floored at 0 (rotation does not consume allocation).
+ */
+export function summarizeCashflowCzk(transactions, fxMap = DEFAULT_FX) {
+  let buys = 0
+  let sells = 0
+  for (const tx of transactions || []) {
+    const type = String(tx?.type || '').toUpperCase()
+    const amount = buyAmountCzk(tx, fxMap)
+    if (type === 'BUY') buys += amount
+    else if (type === 'SELL') sells += amount
+  }
+  const net = buys - sells
+  return { buys, sells, net, allocated: Math.max(0, net) }
 }
 
 function normalizeTicker(ticker) {
@@ -236,84 +255,28 @@ function computeDividendsByTicker(transactions, fxMap) {
 /**
  * Open positions from transactions: qty = SUM(BUY) - SUM(SELL), keep qty > 0.
  * BRYN.DE merges XTB + DIP into one row when both accounts are included.
- * Average price = weighted average of remaining FIFO lots (original currency).
+ * Average price = weighted average of remaining FIFO lots in native currency (no CZK FX).
+ * FX is used only for valueCzk / investedCzk / P&L CZK.
  */
 export function computePositions(transactions, fxMap, asOf = new Date(), priceByTicker = null) {
-  const byTicker = new Map()
+  const byTicker = fifoLotsByTicker(transactions)
   const dividendsByTicker = computeDividendsByTicker(transactions, fxMap)
-
-  const sorted = [...transactions].sort((a, b) => {
-    const d = String(a.date).localeCompare(String(b.date))
-    if (d !== 0) return d
-    return String(a.created_at || '').localeCompare(String(b.created_at || ''))
-  })
-
-  for (const tx of sorted) {
-    const ticker = normalizeTicker(tx.ticker)
-    if (!ticker) continue
-    if (isDividend(tx.type)) continue
-
-    if (!byTicker.has(ticker)) {
-      byTicker.set(ticker, {
-        ticker,
-        currency: String(tx.currency || 'CZK').toUpperCase(),
-        qty: 0,
-        costCzk: 0,
-        buyQty: 0,
-        buyNotional: 0,
-        lots: [],
-        accounts: new Set(),
-      })
-    }
-
-    const pos = byTicker.get(ticker)
-    if (tx.currency) pos.currency = String(tx.currency).toUpperCase()
-    if (tx.account) pos.accounts.add(String(tx.account).toLowerCase())
-
-    const qty = Number(tx.quantity) || 0
-    const price = Number(tx.price) || 0
-    const txCurrency = String(tx.currency || pos.currency || 'CZK').toUpperCase()
-
-    if (isBuy(tx.type)) {
-      pos.qty += qty
-      pos.costCzk += toCzk(price * qty, txCurrency, fxMap)
-      pos.buyQty += qty
-      pos.buyNotional += price * qty
-      pos.lots.push({
-        qty,
-        remaining: qty,
-        price,
-        currency: txCurrency,
-        account: tx.account,
-        date: tx.date,
-      })
-    } else if (isSell(tx.type)) {
-      pos.qty -= qty
-      let left = qty
-      for (const lot of pos.lots) {
-        if (left <= 0) break
-        const take = Math.min(lot.remaining, left)
-        pos.costCzk -= toCzk(lot.price * take, lot.currency, fxMap)
-        lot.remaining -= take
-        left -= take
-      }
-    }
-  }
 
   const positions = []
   for (const pos of byTicker.values()) {
-    if (pos.qty <= 1e-9) continue
-
     const openLots = enrichOpenLots(pos.lots, asOf)
     const remainingQty = openLots.reduce((s, l) => s + l.qty, 0)
-    const weightedSum = openLots.reduce((s, l) => s + l.price * l.qty, 0)
-    const avgPrice = remainingQty > 0 ? weightedSum / remainingQty : 0
-    const avgBuyPrice = pos.buyQty > 0 ? pos.buyNotional / pos.buyQty : 0
+    if (remainingQty <= 1e-9) continue
+
+    const avgPrice = nativeWeightedAverage(openLots)
 
     const price = latestMarketPrice(priceByTicker, pos.ticker) ?? 0
     const currency = pos.currency
-    const valueCzk = toCzk(price * pos.qty, currency, fxMap)
-    const investedCzk = Math.max(pos.costCzk, 0)
+    const valueCzk = toCzk(price * remainingQty, currency, fxMap)
+    const investedCzk = Math.max(
+      openLots.reduce((s, lot) => s + toCzk(lot.price * lot.qty, lot.currency, fxMap), 0),
+      0,
+    )
     const pnlCzk = valueCzk - investedCzk
     const pnlPct = investedCzk > 0 ? pnlCzk / investedCzk : 0
     const pricePnlPct = avgPrice > 0 ? (price - avgPrice) / avgPrice : 0
@@ -326,10 +289,10 @@ export function computePositions(transactions, fxMap, asOf = new Date(), priceBy
     positions.push({
       ticker: pos.ticker,
       currency,
-      qty: pos.qty,
+      qty: remainingQty,
       price,
       avgPrice,
-      avgBuyPrice,
+      avgBuyPrice: avgPrice,
       valueCzk,
       investedCzk,
       pnlCzk,
@@ -512,28 +475,41 @@ export function sumRealizedPnl(realized) {
   return realized.reduce((s, t) => s + t.pnlCzk, 0)
 }
 
-/** XTB monthly allocated: SUM BUY Kč in current month, account=xtb */
-export function computeMonthlyXtbAllocated(transactions, yearMonth, fxMap) {
-  return transactions
-    .filter(
-      (tx) =>
-        isBuy(tx.type) &&
-        String(tx.account || '').toLowerCase() === 'xtb' &&
-        String(tx.date || '').startsWith(yearMonth),
-    )
-    .reduce((s, tx) => s + buyAmountCzk(tx, fxMap), 0)
+function isBuyOrSell(type) {
+  const t = String(type || '').toUpperCase()
+  return t === 'BUY' || t === 'SELL'
 }
 
-/** DIP yearly invested */
+/** XTB monthly: BUY − SELL Kč, allocated floored at 0. */
+export function computeMonthlyXtbAllocation(transactions, yearMonth, fxMap) {
+  const rows = (transactions || []).filter(
+    (tx) =>
+      isBuyOrSell(tx.type) &&
+      String(tx.account || '').toLowerCase() === 'xtb' &&
+      String(tx.date || '').startsWith(yearMonth),
+  )
+  return summarizeCashflowCzk(rows, fxMap)
+}
+
+/** @deprecated use computeMonthlyXtbAllocation().allocated */
+export function computeMonthlyXtbAllocated(transactions, yearMonth, fxMap) {
+  return computeMonthlyXtbAllocation(transactions, yearMonth, fxMap).allocated
+}
+
+/** DIP yearly: BUY − SELL Kč, allocated floored at 0. */
+export function computeDipYearAllocation(transactions, year, fxMap) {
+  const rows = (transactions || []).filter(
+    (tx) =>
+      isBuyOrSell(tx.type) &&
+      String(tx.account || '').toLowerCase() === 'dip' &&
+      String(tx.date || '').startsWith(String(year)),
+  )
+  return summarizeCashflowCzk(rows, fxMap)
+}
+
+/** @deprecated use computeDipYearAllocation().allocated */
 export function computeDipYearInvested(transactions, year, fxMap) {
-  return transactions
-    .filter(
-      (tx) =>
-        isBuy(tx.type) &&
-        String(tx.account || '').toLowerCase() === 'dip' &&
-        String(tx.date || '').startsWith(String(year)),
-    )
-    .reduce((s, tx) => s + buyAmountCzk(tx, fxMap), 0)
+  return computeDipYearAllocation(transactions, year, fxMap).allocated
 }
 
 export function dipBuyHistory(transactions, year, fxMap) {

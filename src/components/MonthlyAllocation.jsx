@@ -8,7 +8,16 @@ function progressColor(pct, variant) {
   return '#eab308'
 }
 
-function ProgressBar({ value, target, variant = 'xtb' }) {
+function AllocationDetail({ buys = 0, sells = 0, allocated = 0 }) {
+  const text = `Nákupy: ${formatCzk(buys)} | Prodeje: ${formatCzk(sells)} | Čisté: ${formatCzk(allocated)}`
+  return (
+    <p className="mt-1 text-[11px] leading-relaxed text-[#94a3b8]" title={text}>
+      {text}
+    </p>
+  )
+}
+
+function ProgressBar({ value, target, variant = 'xtb', detail }) {
   const pct = target > 0 ? Math.min(value / target, 1.15) : 0
   const fill = Math.min(pct, 1) * 100
   const color = progressColor(target > 0 ? value / target : 0, variant)
@@ -25,6 +34,7 @@ function ProgressBar({ value, target, variant = 'xtb' }) {
           style={{ width: `${fill}%`, backgroundColor: color }}
         />
       </div>
+      {detail ? <AllocationDetail {...detail} /> : null}
       <p className="mt-1 text-right text-xs text-[#94a3b8]">
         {target > 0 ? `${Math.round((value / target) * 100)} %` : '—'}
       </p>
@@ -35,8 +45,10 @@ function ProgressBar({ value, target, variant = 'xtb' }) {
 export default function MonthlyAllocation({
   xtbTarget,
   xtbAllocated,
+  xtbAllocation,
   dipTarget,
   dipInvested,
+  dipAllocation,
   dipHistory,
   dipYear = new Date().getFullYear(),
 }) {
@@ -50,14 +62,24 @@ export default function MonthlyAllocation({
         <div className="rounded-lg border border-[#e2e8f0] bg-white p-4">
           <h3 className="text-sm font-semibold text-[#0f172a]">XTB (měsíčně)</h3>
           <div className="mt-3">
-            <ProgressBar value={xtbAllocated} target={xtbTarget} variant="xtb" />
+            <ProgressBar
+              value={xtbAllocated}
+              target={xtbTarget}
+              variant="xtb"
+              detail={xtbAllocation}
+            />
           </div>
         </div>
 
         <div className="rounded-lg border border-[#e2e8f0] bg-white p-4">
           <h3 className="text-sm font-semibold text-[#0f172a]">DIP (roční)</h3>
           <div className="mt-3">
-            <ProgressBar value={dipInvested} target={dipTarget} variant="dip" />
+            <ProgressBar
+              value={dipInvested}
+              target={dipTarget}
+              variant="dip"
+              detail={dipAllocation}
+            />
           </div>
 
           <button

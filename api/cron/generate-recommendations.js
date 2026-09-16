@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { computeNativeHoldings } from '../../src/lib/nativeHoldings.js'
 
 const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'] // primary → fallback
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -102,7 +103,7 @@ function resolveTxAccount(tx) {
   return DIP_TICKERS.has(ticker) ? 'DIP' : 'XTB'
 }
 
-/** BUY value in Kč: quantity × price × exchange_rate (fallback FX by currency / rules). */
+/** BUY/SELL value in Kč: quantity × price × exchange_rate (fallback FX by currency / rules). */
 function txBuyCzk(tx) {
   const qty = Number(tx.quantity) || 0
   const price = Number(tx.price) || 0
@@ -115,17 +116,18 @@ function isDipTicker(ticker) {
   return DIP_TICKERS.has(normalizeTicker(ticker))
 }
 
-/** SUM of BUY Kč for account since first day of yearMonth (YYYY-MM). */
-function sumMonthlyBuysCzk(transactions, account, yearMonth) {
-  const want = String(account || '').toUpperCase()
-  let sum = 0
+function summarizeNetCzk(transactions, predicate) {
+  let buys = 0
+  let sells = 0
   for (const tx of transactions || []) {
-    if (String(tx.type || '').toUpperCase() !== 'BUY') continue
-    if (!String(tx.date || '').startsWith(yearMonth)) continue
-    if (resolveTxAccount(tx) !== want) continue
-    sum += txBuyCzk(tx)
+    if (predicate && !predicate(tx)) continue
+    const type = String(tx.type || '').toUpperCase()
+    const amount = txBuyCzk(tx)
+    if (type === 'BUY') buys += amount
+    else if (type === 'SELL') sells += amount
   }
-  return sum
+  const net = buys - sells
+  return { buys, sells, net, allocated: Math.max(0, net) }
 }
 
 function getRuleValue(rules, key, fallback = null) {
@@ -273,50 +275,9 @@ function latestByTicker(rows) {
   return map
 }
 
-/** Qty + weighted avg cost from BUY/SELL (proportional cost on sell). */
+/** Qty + native FIFO avg cost (same helper as Positions page — no CZK FX). */
 function computeHoldings(transactions) {
-  const map = new Map()
-
-  const sorted = [...(transactions || [])].sort((a, b) => {
-    const d = String(a.date || '').localeCompare(String(b.date || ''))
-    if (d !== 0) return d
-    return String(a.created_at || '').localeCompare(String(b.created_at || ''))
-  })
-
-  for (const tx of sorted) {
-    const ticker = normalizeTicker(tx.ticker)
-    if (!ticker) continue
-    const type = String(tx.type || '').toUpperCase()
-    if (type !== 'BUY' && type !== 'SELL') continue
-
-    const qty = Number(tx.quantity) || 0
-    const price = Number(tx.price) || 0
-    const currency = String(tx.currency || 'CZK').toUpperCase()
-    if (!map.has(ticker)) map.set(ticker, { qty: 0, cost: 0, currency })
-
-    const pos = map.get(ticker)
-    if (tx.currency) pos.currency = currency
-
-    if (type === 'BUY') {
-      pos.qty += qty
-      pos.cost += price * qty
-    } else {
-      const avg = pos.qty > 0 ? pos.cost / pos.qty : 0
-      pos.qty -= qty
-      pos.cost -= avg * qty
-    }
-  }
-
-  const out = new Map()
-  for (const [ticker, pos] of map) {
-    if (pos.qty <= 1e-9) continue
-    out.set(ticker, {
-      qty: pos.qty,
-      avgPrice: pos.qty > 0 ? pos.cost / pos.qty : 0,
-      currency: pos.currency || 'CZK',
-    })
-  }
-  return out
+  return computeNativeHoldings(transactions)
 }
 
 function enrichHoldings(holdings, prices, watchlistByTicker) {
@@ -339,16 +300,6 @@ function enrichHoldings(holdings, prices, watchlistByTicker) {
   }
 
   return { holdings: enriched, totalEquity }
-}
-
-function sumBuysCzk(transactions, predicate) {
-  let sum = 0
-  for (const tx of transactions || []) {
-    if (String(tx.type || '').toUpperCase() !== 'BUY') continue
-    if (!predicate(tx)) continue
-    sum += txBuyCzk(tx)
-  }
-  return sum
 }
 
 function getExitCheckState(now = new Date()) {
@@ -431,7 +382,11 @@ function buildSystemPrompt({
   xtbInvested,
   xtbTarget,
   xtbRemaining,
+  xtbBuys,
+  xtbSells,
   dipInvestedMonth,
+  dipMonthBuys,
+  dipMonthSells,
   dipTarget,
   dipMonthlyNeeded,
   remainingDipCzk,
@@ -575,13 +530,14 @@ ${fundBlock}
 ALOKACE:
 ${allocationNote}
 
-MĚSÍČNÍ ALOKACE - STAV:
-XTB: investováno ${fmtCzk(xtbInvested)} z cíle ${fmtCzk(xtbTarget)}. Zbývá: ${fmtCzk(xtbRemaining)}.
-DIP: investováno ${fmtCzk(dipInvestedMonth)} z ročního cíle ${fmtCzk(dipTarget)}. Měsíční průměr potřebný: ${fmtCzk(dipMonthlyNeeded)}.
+MĚSÍČNÍ ALOKACE - STAV (čisté = nákupy − prodeje, minimum 0; rotace pozic alokaci nevyčerpává):
+XTB: nákupy ${fmtCzk(xtbBuys)} | prodeje ${fmtCzk(xtbSells)} | čisté ${fmtCzk(xtbInvested)} z cíle ${fmtCzk(xtbTarget)}. Zbývá: ${fmtCzk(xtbRemaining)}.
+DIP: nákupy ${fmtCzk(dipMonthBuys)} | prodeje ${fmtCzk(dipMonthSells)} | čisté ${fmtCzk(dipInvestedMonth)} tento měsíc. Roční cíl ${fmtCzk(dipTarget)}, měsíční průměr potřebný: ${fmtCzk(dipMonthlyNeeded)}.
 Zbývající DIP alokace (rok): ${fmtCzk(remainingDipCzk)}
 
-Pokud je XTB alokace vyčerpaná (zbývá <= 0), NEDOPORUČUJ žádné BUY na XTB účet.
-Pokud je DIP alokace na dobré cestě (tento měsíc ≥ měsíční průměr, nebo roční cíl splněn), NEDOPORUČUJ extra DIP nákupy (BRYN.DE, SPYI.DE).
+Pokud je XTB alokace vyčerpaná (čisté investice >= cíl, zbývá <= 0), NEDOPORUČUJ žádné BUY na XTB účet.
+Pokud čisté XTB investice jsou 0 protože se tento měsíc víc prodalo než nakoupilo, alokace NENÍ vyčerpaná — zbývá celý měsíční cíl.
+Pokud je DIP alokace na dobré cestě (tento měsíc čisté ≥ měsíční průměr, nebo roční cíl splněn), NEDOPORUČUJ extra DIP nákupy (BRYN.DE, SPYI.DE).
 BUY doporučení vždy počítej jen ze zbývající alokace, nikdy nepřekračuj měsíční cíl.
 ${allocationExhausted ? 'Obě alokace jsou vyčerpané / na dobré cestě — NEDOPORUČUJ žádné BUY. SUMMARY musí říct přesně: "Měsíční alokace vyčerpaná. Tento měsíc nekupovat."' : ''}
 
@@ -912,16 +868,25 @@ async function loadContext(supabase) {
   const { holdings, totalEquity } = enrichHoldings(rawHoldings, prices, watchlistByTicker)
 
   const xtbTarget = getRuleNumber(rules, 'monthly_xtb', 21000)
-  const xtbInvested = sumMonthlyBuysCzk(transactions, 'XTB', ym)
+  const xtbFlow = summarizeNetCzk(
+    transactions,
+    (tx) => String(tx.date || '').startsWith(ym) && resolveTxAccount(tx) === 'XTB',
+  )
+  const xtbInvested = xtbFlow.allocated
   const xtbRemaining = Math.max(0, xtbTarget - xtbInvested)
 
   const dipTarget = resolveDipYearTarget(rules, year)
-  const dipInvestedMonth = sumMonthlyBuysCzk(transactions, 'DIP', ym)
-  const dipInvestedYear = sumBuysCzk(
+  const dipMonthFlow = summarizeNetCzk(
+    transactions,
+    (tx) => String(tx.date || '').startsWith(ym) && resolveTxAccount(tx) === 'DIP',
+  )
+  const dipYearFlow = summarizeNetCzk(
     transactions,
     (tx) =>
       resolveTxAccount(tx) === 'DIP' && String(tx.date || '').startsWith(String(year)),
   )
+  const dipInvestedMonth = dipMonthFlow.allocated
+  const dipInvestedYear = dipYearFlow.allocated
   const remainingDipCzk = Math.max(0, dipTarget - dipInvestedYear)
   const dipMonthlyNeeded = dipTarget / 12
   const dipOnTrack =
@@ -961,7 +926,11 @@ async function loadContext(supabase) {
     xtbTarget,
     xtbRemaining,
     remainingMonthlyCzk: xtbRemaining,
+    xtbBuys: xtbFlow.buys,
+    xtbSells: xtbFlow.sells,
     dipInvestedMonth,
+    dipMonthBuys: dipMonthFlow.buys,
+    dipMonthSells: dipMonthFlow.sells,
     dipTarget,
     dipMonthlyNeeded,
     remainingDipCzk,
@@ -1035,7 +1004,11 @@ export default async function handler(req, res) {
       xtbInvested: ctx.xtbInvested,
       xtbTarget: ctx.xtbTarget,
       xtbRemaining: ctx.xtbRemaining,
+      xtbBuys: ctx.xtbBuys,
+      xtbSells: ctx.xtbSells,
       dipInvestedMonth: ctx.dipInvestedMonth,
+      dipMonthBuys: ctx.dipMonthBuys,
+      dipMonthSells: ctx.dipMonthSells,
       dipTarget: ctx.dipTarget,
       dipMonthlyNeeded: ctx.dipMonthlyNeeded,
       remainingDipCzk: ctx.remainingDipCzk,

@@ -45,14 +45,19 @@ function PeriodTabs({ tabs, value, onChange }) {
 
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
-  const xtb = payload.find((p) => p.dataKey === 'xtb')?.value ?? 0
-  const dip = payload.find((p) => p.dataKey === 'dip')?.value ?? 0
+  const row = payload[0]?.payload || {}
+  const xtb = row.xtb ?? 0
+  const dip = row.dip ?? 0
   return (
     <div className="rounded-lg border border-[#e2e8f0] bg-white px-3 py-2 text-xs shadow-sm">
       <p className="mb-1 font-medium text-[#0f172a]">{label}</p>
       <p style={{ color: XTB_COLOR }}>XTB: {formatCzk(xtb)}</p>
       <p style={{ color: DIP_COLOR }}>DIP: {formatCzk(dip)}</p>
       <p className="mt-1 text-[#475569]">Celkem: {formatCzk(xtb + dip)}</p>
+      <p className="mt-1 text-[11px] text-[#94a3b8]">
+        Nákupy: {formatCzk((row.xtbBuys || 0) + (row.dipBuys || 0))} | Prodeje:{' '}
+        {formatCzk((row.xtbSells || 0) + (row.dipSells || 0))}
+      </p>
     </div>
   )
 }

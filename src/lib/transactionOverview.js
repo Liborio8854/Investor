@@ -152,13 +152,34 @@ export function monthKeysForPeriod(period, transactions = [], now = new Date()) 
 export function aggregateBuysByMonth(transactions, fxMap) {
   const map = new Map()
   for (const tx of transactions || []) {
+    const type = String(tx.type || '').toUpperCase()
+    if (type !== 'BUY' && type !== 'SELL') continue
     const ym = monthKeyFromDate(tx.date)
     if (!ym) continue
-    if (!map.has(ym)) map.set(ym, { month: ym, xtb: 0, dip: 0 })
+    if (!map.has(ym)) {
+      map.set(ym, {
+        month: ym,
+        xtbBuys: 0,
+        xtbSells: 0,
+        dipBuys: 0,
+        dipSells: 0,
+      })
+    }
     const row = map.get(ym)
     const amount = buyAmountCzk(tx, fxMap)
-    if (resolveBuyAccount(tx) === 'DIP') row.dip += amount
-    else row.xtb += amount
+    const account = resolveBuyAccount(tx)
+    if (account === 'DIP') {
+      if (type === 'BUY') row.dipBuys += amount
+      else row.dipSells += amount
+    } else if (type === 'BUY') {
+      row.xtbBuys += amount
+    } else {
+      row.xtbSells += amount
+    }
+  }
+  for (const row of map.values()) {
+    row.xtb = Math.max(0, row.xtbBuys - row.xtbSells)
+    row.dip = Math.max(0, row.dipBuys - row.dipSells)
   }
   return map
 }
@@ -194,12 +215,23 @@ export function buildBuyOverview(transactions, period = 'ytd', now = new Date(),
   }
 
   const chart = keys.map((ym) => {
-    const row = byMonth.get(ym) || { xtb: 0, dip: 0 }
+    const row = byMonth.get(ym) || {
+      xtb: 0,
+      dip: 0,
+      xtbBuys: 0,
+      xtbSells: 0,
+      dipBuys: 0,
+      dipSells: 0,
+    }
     return {
       month: ym,
       label: monthLabelShort(ym, { withYear: multiYear }),
       xtb: row.xtb,
       dip: row.dip,
+      xtbBuys: row.xtbBuys || 0,
+      xtbSells: row.xtbSells || 0,
+      dipBuys: row.dipBuys || 0,
+      dipSells: row.dipSells || 0,
       total: row.xtb + row.dip,
     }
   })
@@ -209,7 +241,8 @@ export function buildBuyOverview(transactions, period = 'ytd', now = new Date(),
     .reverse()
     .filter((ym) => {
       const row = byMonth.get(ym)
-      return row && (row.xtb > 0 || row.dip > 0)
+      if (!row) return false
+      return row.xtbBuys > 0 || row.xtbSells > 0 || row.dipBuys > 0 || row.dipSells > 0
     })
     .map((ym) => {
       const row = byMonth.get(ym)

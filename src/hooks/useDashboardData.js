@@ -5,9 +5,9 @@ import { currentYearMonth } from '../lib/format'
 import {
   buildFxMapFromRules,
   computeCurrencyExposure,
-  computeDipYearInvested,
+  computeDipYearAllocation,
   computeInvested,
-  computeMonthlyXtbAllocated,
+  computeMonthlyXtbAllocation,
   computePortfolioValue,
   computePositions,
   computeRealizedTrades,
@@ -91,12 +91,12 @@ export function useDashboardData() {
   const xtbTarget = parseRuleNumber(rules, 'monthly_xtb', 10000)
   const dipYear = new Date().getFullYear()
   const dipTarget = resolveDipYearTarget(rules, dipYear)
-  const xtbAllocated = useMemo(
-    () => computeMonthlyXtbAllocated(liborTx, ym, fxMap),
+  const xtbAllocation = useMemo(
+    () => computeMonthlyXtbAllocation(liborTx, ym, fxMap),
     [liborTx, ym, fxMap],
   )
-  const dipInvested = useMemo(
-    () => computeDipYearInvested(liborTx, dipYear, fxMap),
+  const dipAllocation = useMemo(
+    () => computeDipYearAllocation(liborTx, dipYear, fxMap),
     [liborTx, fxMap, dipYear],
   )
   const dipHistory = useMemo(
@@ -118,9 +118,11 @@ export function useDashboardData() {
     realizedPnl,
     exposure,
     xtbTarget,
-    xtbAllocated,
+    xtbAllocated: xtbAllocation.allocated,
+    xtbAllocation,
     dipTarget,
-    dipInvested,
+    dipInvested: dipAllocation.allocated,
+    dipAllocation,
     dipHistory,
     dipYear,
     transactionsCount: liborTx.length,

@@ -44,29 +44,33 @@ export async function fetchTransactions(userId) {
   return selectTransactions(userId)
 }
 
-/** BUY rows for overview chart/table (frontend aggregation). */
+/** BUY + SELL rows for overview chart/table (frontend aggregation). */
 export async function fetchBuyTransactions(userId) {
+  const colsWithRate =
+    'date, ticker, type, quantity, price, exchange_rate, currency, account, portfolio'
+  const colsBasic = 'date, ticker, type, quantity, price, currency, account, portfolio'
+
   const withRate = await supabase
     .from('inv_transactions')
-    .select('date, ticker, quantity, price, exchange_rate, currency, account, portfolio')
+    .select(colsWithRate)
     .eq('user_id', userId)
-    .eq('type', 'BUY')
+    .in('type', ['BUY', 'SELL'])
     .order('date', { ascending: false })
 
   if (!withRate.error) return withRate.data || []
 
   if (!/exchange_rate/i.test(withRate.error.message || '')) {
-    throw new Error(withRate.error.message || 'Chyba při načítání: inv_transactions BUY')
+    throw new Error(withRate.error.message || 'Chyba při načítání: inv_transactions BUY/SELL')
   }
 
   const fallback = await supabase
     .from('inv_transactions')
-    .select('date, ticker, quantity, price, currency, account, portfolio')
+    .select(colsBasic)
     .eq('user_id', userId)
-    .eq('type', 'BUY')
+    .in('type', ['BUY', 'SELL'])
     .order('date', { ascending: false })
 
-  return assertOk(fallback, 'inv_transactions BUY')
+  return assertOk(fallback, 'inv_transactions BUY/SELL')
 }
 
 const TX_SELECT = TX_SELECT_WITH_RATE

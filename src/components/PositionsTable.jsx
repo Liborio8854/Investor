@@ -95,10 +95,10 @@ function PositionCard({ position, weight, open, onToggle, companyName }) {
               <span className="uppercase">{position.currency}</span>
               {' · '}
               {formatNum(position.qty)} ks
-              {position.avgBuyPrice > 0 ? (
+              {position.avgPrice > 0 ? (
                 <>
                   {' · '}
-                  Ø {formatPrice(position.avgBuyPrice, position.currency)}
+                  Ø {formatPrice(position.avgPrice, position.currency)}
                 </>
               ) : null}
             </span>

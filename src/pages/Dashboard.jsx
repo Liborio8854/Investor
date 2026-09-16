@@ -20,8 +20,10 @@ export default function Dashboard() {
     exposure,
     xtbTarget,
     xtbAllocated,
+    xtbAllocation,
     dipTarget,
     dipInvested,
+    dipAllocation,
     dipHistory,
     dipYear,
     transactionsCount,
@@ -71,8 +73,10 @@ export default function Dashboard() {
       <MonthlyAllocation
         xtbTarget={xtbTarget}
         xtbAllocated={xtbAllocated}
+        xtbAllocation={xtbAllocation}
         dipTarget={dipTarget}
         dipInvested={dipInvested}
+        dipAllocation={dipAllocation}
         dipHistory={dipHistory}
         dipYear={dipYear}
       />
