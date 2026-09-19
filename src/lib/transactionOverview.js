@@ -2,7 +2,7 @@ import { buyAmountCzk } from './portfolio'
 
 export { buyAmountCzk }
 
-const DIP_TICKERS = new Set(['BRYN.DE', 'SPYI.DE'])
+const DIP_TICKERS = new Set(['BRYN.DE', 'VGLA.DE', 'SPYI.DE'])
 
 const MONTH_SHORT = [
   'led',
@@ -60,7 +60,7 @@ export function monthLabelFull(ym) {
   return `${name} ${year}`
 }
 
-/** Prefer account column; missing → BRYN.DE/SPYI.DE = DIP, else XTB. FIO counts as XTB. */
+/** Prefer account column; missing → BRYN.DE/VGLA.DE (legacy SPYI.DE) = DIP, else XTB. FIO counts as XTB. */
 export function resolveBuyAccount(tx) {
   const acc = String(tx?.account || '')
     .trim()

@@ -5,6 +5,7 @@ export const MOCK_PRICES = {
   CHKP: { price: 128.23, currency: 'USD' },
   'NOV.DE': { price: 44.22, currency: 'EUR' },
   'BRYN.DE': { price: 447.75, currency: 'EUR' },
+  'VGLA.DE': { price: 11.31, currency: 'EUR' },
   'SPYI.DE': { price: 11.31, currency: 'EUR' },
   'CSG.AS': { price: 16.54, currency: 'EUR' },
   RYAAY: { price: 59.96, currency: 'USD' },

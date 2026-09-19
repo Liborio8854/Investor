@@ -5,6 +5,7 @@ export const tickerNames = {
   CHKP: 'Check Point Software',
   'NOV.DE': 'Novo Nordisk',
   'BRYN.DE': 'Berkshire Hathaway',
+  'VGLA.DE': 'Vanguard FTSE Global All-Cap',
   'SPYI.DE': 'SPDR MSCI ACWI IMI',
   'CSG.AS': 'CSG N.V.',
   'NKE.DE': 'Nike, Inc.',

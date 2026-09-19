@@ -53,7 +53,7 @@ export const RULE_SECTIONS = [
     ],
     groups: [
       {
-        title: 'S&P 500 / SPYI pauza',
+        title: 'S&P 500 / VGLA pauza',
         rows: [
           {
             key: 'sp500_pe_threshold',
@@ -334,7 +334,7 @@ export function formatRuleDisplay(value, format) {
 }
 
 /**
- * SPYI / S&P 500 status from PE vs rules.
+ * VGLA / S&P 500 status from PE vs rules.
  * resumeCorrection stored as ratio 0.20 (= 20 % drop from ATH required).
  * athDistance is percent points from inv_rules.sp500_vs_ath (e.g. -0.5 = -0,5 %).
  */

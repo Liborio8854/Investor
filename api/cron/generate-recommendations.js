@@ -88,8 +88,8 @@ function toCzk(amount, currency) {
   return Number(amount || 0) * rate
 }
 
-/** DIP tickers when `account` is missing on a transaction row. */
-const DIP_TICKERS = new Set(['BRYN.DE', 'SPYI.DE'])
+/** DIP tickers when `account` is missing on a transaction row. SPYI.DE = legacy (replaced by VGLA.DE). */
+const DIP_TICKERS = new Set(['BRYN.DE', 'VGLA.DE', 'SPYI.DE'])
 
 /** Resolve XTB vs DIP: prefer account column, else ticker heuristic. */
 function resolveTxAccount(tx) {
@@ -493,8 +493,9 @@ ${watchBlock}
 Pokud cíl = —, ticker nemá cílovou cenu — nezobrazuj vzdálenost a nedoporučuj nákup podle vzdálenosti od cíle.
 
 S&P 500 P/E (zdroj: SPY ETF): ${sp500Pe}, práh: ${sp500Threshold}, status: ${sp500Status}
-Pokud S&P 500 P/E > práh → PAUZA: nekupovat SPYI.DE, alokaci směřovat do MWEQ.DE
-Pokud S&P 500 P/E ≤ práh → AKTIVNÍ: kupovat SPYI.DE (MWEQ.DE nedoporučuj)
+Pokud S&P 500 P/E > práh → PAUZA: nekupovat VGLA.DE, alokaci směřovat do MWEQ.DE
+Pokud S&P 500 P/E ≤ práh → AKTIVNÍ: kupovat VGLA.DE (MWEQ.DE nedoporučuj)
+VGLA.DE (Vanguard FTSE Global All-Cap, TER 0,07 %, ACC, EUR) je cap-weighted globální ETF. Kupuj když sp500_status = AKTIVNÍ. Pokud sp500_status = PAUZA, kupuj MWEQ.DE místo toho.
 
 AKTUÁLNÍ POZICE:
 ticker | počet ks | průměrná cena | aktuální cena | P&L % | váha portfolia | soft limit | hard/opp limit | limit status
@@ -537,7 +538,7 @@ Zbývající DIP alokace (rok): ${fmtCzk(remainingDipCzk)}
 
 Pokud je XTB alokace vyčerpaná (čisté investice >= cíl, zbývá <= 0), NEDOPORUČUJ žádné BUY na XTB účet.
 Pokud čisté XTB investice jsou 0 protože se tento měsíc víc prodalo než nakoupilo, alokace NENÍ vyčerpaná — zbývá celý měsíční cíl.
-Pokud je DIP alokace na dobré cestě (tento měsíc čisté ≥ měsíční průměr, nebo roční cíl splněn), NEDOPORUČUJ extra DIP nákupy (BRYN.DE, SPYI.DE).
+Pokud je DIP alokace na dobré cestě (tento měsíc čisté ≥ měsíční průměr, nebo roční cíl splněn), NEDOPORUČUJ extra DIP nákupy (BRYN.DE, VGLA.DE).
 BUY doporučení vždy počítej jen ze zbývající alokace, nikdy nepřekračuj měsíční cíl.
 ${allocationExhausted ? 'Obě alokace jsou vyčerpané / na dobré cestě — NEDOPORUČUJ žádné BUY. SUMMARY musí říct přesně: "Měsíční alokace vyčerpaná. Tento měsíc nekupovat."' : ''}
 
@@ -572,23 +573,24 @@ Logika výběru BUY:
 - Pokud je pozice na limitu nebo blízko (>90 % soft limitu), NEKUPUJ — řekni "pozice na limitu"
 - BF-A v buy zóně smí růst až k opportunity limitu (${fmtPctPlain(limits.opportunity)})
 - Rozděl zbývající měsíční alokaci mezi doporučené nákupy (součet Kč ≤ zbývající alokace XTB)
-- Pokud zbývá XTB alokace ≤ 0, žádná BUY na XTB (včetně MWEQ.DE)
-MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k SPYI.DE. Pokud je sp500_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je S&P 500 P/E nad prahem (PAUZA). Pokud je sp500_status = AKTIVNÍ, MWEQ nedoporučuj (preferuj SPYI.DE dle plánu).
+- Pokud zbývá XTB alokace ≤ 0, žádná BUY na XTB (včetně VGLA.DE a MWEQ.DE)
+Pokud je sp500_status = AKTIVNÍ a zbývá měsíční alokace, doporuč BUY VGLA.DE s konkrétním počtem kusů za zbývající částku. VGLA nemá cílovou cenu — kupuje se vždy, když je S&P 500 P/E na/pod prahem (AKTIVNÍ). Pokud je sp500_status = PAUZA, VGLA nedoporučuj.
+MWEQ.DE (Invesco MSCI World Equal Weight ETF) je alternativa k VGLA.DE. Pokud je sp500_status = PAUZA a zbývá měsíční alokace, doporuč BUY MWEQ.DE s konkrétním počtem kusů za zbývající částku. MWEQ nemá cílovou cenu — kupuje se vždy, když je S&P 500 P/E nad prahem (PAUZA). Pokud je sp500_status = AKTIVNÍ, MWEQ nedoporučuj (preferuj VGLA.DE dle plánu).
 Priorita nákupů:
 1. Nejdřív value akcie v buy zóně (vzdálenost od cíle < 5 %) — to jsou příležitosti, které nemusí trvat
-2. Až pak MWEQ.DE jako doplnění zbývající alokace
-3. MWEQ.DE nikdy nemá přednost před value akcií v buy zóně
+2. Až pak VGLA.DE (pokud sp500_status = AKTIVNÍ) nebo MWEQ.DE (pokud sp500_status = PAUZA) jako doplnění zbývající alokace
+3. VGLA.DE ani MWEQ.DE nikdy nemají přednost před value akcií v buy zóně
 Příklad: Pokud RYAAY je 2 % od cíle a zbývá 12 000 Kč alokace:
 - Doporuč nejdřív RYAAY (např. 5 ks za ~6 000 Kč)
-- Zbytek alokace (6 000 Kč) do MWEQ.DE
-- SUMMARY: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
-Pokud žádná akcie není v buy zóně, celou alokaci do MWEQ.DE (pokud sp500_status = PAUZA).
+- Zbytek alokace (6 000 Kč) do VGLA.DE (AKTIVNÍ) nebo MWEQ.DE (PAUZA)
+- SUMMARY: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x VGLA.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do VGLA."
+Pokud žádná akcie není v buy zóně, celou alokaci do VGLA.DE (pokud sp500_status = AKTIVNÍ) nebo MWEQ.DE (pokud sp500_status = PAUZA).
 WATCH: ticker se blíží k zóně (10-15 %); také soft-limit upozornění (BRK nad soft / standardní nad limitem ale ne hard)
 ALERT: jen hard-limit překročení (BRK > hard), standardní pozice výrazně nad opportunity (>18 %), nebo exit trigger aktivní (jen v EXIT CHECK okně). Nealertuj ztlumené tickery ani české kotvy (KOMB.PR, CEZ.PR). Nikdy nepoužívej hardcoded 10 % — ber limity z LIMITY POZIC.
 REBALANCE: pokud je den > 20 a alokace nesplněna, připomeň; také při BRK nad hard limitem (ne u KOMB.PR / CEZ.PR)
 SUMMARY (povinné, vždy poslední, priority 99):
-- Krátká česká věta: co dnes koupit (value akcie první, MWEQ jako zbytek alokace)
-- Příklad: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x MWEQ.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do MWEQ."
+- Krátká česká věta: co dnes koupit (value akcie první, VGLA nebo MWEQ jako zbytek alokace)
+- Příklad: "Dnes kup 5x RYAAY (~6 000 Kč) a 40x VGLA.DE (~6 000 Kč). RYAAY je v buy zóně, zbytek alokace do VGLA."
 - Pokud není nic ke koupi: "Dnes nekupovat — žádný ticker v buy zóně."
 - Pokud je XTB i DIP alokace vyčerpaná / na dobré cestě: "Měsíční alokace vyčerpaná. Tento měsíc nekupovat."
 Nikdy nedoporučuj prodej bez aktivního exit triggeru

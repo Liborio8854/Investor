@@ -4,13 +4,61 @@ import YahooFinance from 'yahoo-finance2'
 // yahoo-finance2 v3+ requires instantiation (default export is the class)
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] })
 
-/** Mapování lokálních tickerů → Yahoo symbol (+ volitelný FX přepočet ceny). */
+/** Mapování lokálních tickerů → Yahoo symbol (+ volitelný FX přepočet / fallback). */
 const TICKER_MAP = {
   'FFX.DE': { yahoo: 'FFH.TO', convertCurrency: { from: 'CAD', to: 'EUR' } },
+  // VGLA.DE: Xetra listing (launched 2026-08-20). Fallback VALL.L (LSE) without FX conversion.
+  'VGLA.DE': { yahoo: 'VGLA.DE', fallback: 'VALL.L' },
 }
 
-function resolveYahooSymbol(ticker) {
-  return TICKER_MAP[ticker]?.yahoo || ticker
+function yahooSymbolsFor(ticker) {
+  const mapping = TICKER_MAP[ticker]
+  const primary = mapping?.yahoo || ticker
+  const fallback = mapping?.fallback
+  return fallback && fallback !== primary ? [primary, fallback] : [primary]
+}
+
+/** Quote ticker from Yahoo; on failure try TICKER_MAP.fallback (no FX). */
+async function quoteWithFallback(ticker, yahooStats) {
+  const symbols = yahooSymbolsFor(ticker)
+  let lastError = null
+
+  for (let i = 0; i < symbols.length; i++) {
+    const yahooSymbol = symbols[i]
+    const usedFallback = i > 0
+    try {
+      const quote = await yahooFinance.quote(yahooSymbol)
+      yahooStats.ok += 1
+      if (quote?.regularMarketPrice == null) {
+        lastError = new Error(`quote empty for ${yahooSymbol}`)
+        console.error('[cron/fetch-prices] quote empty', ticker, yahooSymbol)
+      } else {
+        if (usedFallback) {
+          console.warn(
+            `[cron/fetch-prices] ${ticker}: using fallback ${yahooSymbol} (no FX conversion)`,
+          )
+        }
+        return { quote, yahooSymbol, usedFallback }
+      }
+    } catch (err) {
+      yahooStats.failed += 1
+      lastError = err
+      console.error('[cron/fetch-prices] quote failed', ticker, yahooSymbol, err.message)
+    }
+    if (!usedFallback && symbols.length > 1) {
+      console.warn(
+        `[cron/fetch-prices] ${ticker}: ${symbols[0]} unavailable, trying fallback ${symbols[1]} (no FX conversion)`,
+      )
+      await sleep(200)
+    }
+  }
+
+  return {
+    quote: null,
+    yahooSymbol: symbols[symbols.length - 1],
+    usedFallback: symbols.length > 1,
+    error: lastError || new Error(`quote failed for ${ticker}`),
+  }
 }
 
 function getAdminClient() {
@@ -373,15 +421,26 @@ export default async function handler(req, res) {
 
     for (const ticker of tickers) {
       const mapping = TICKER_MAP[ticker]
-      const yahooSymbol = resolveYahooSymbol(ticker)
-      try {
-        const quote = await yahooFinance.quote(yahooSymbol)
-        yahooStats.ok += 1
-        let row = mapQuoteRow(ticker, quote, date)
-        if (!row) {
-          errors.push({ type: 'quote_empty', ticker, yahooSymbol })
-          console.error('[cron/fetch-prices] quote empty', ticker, yahooSymbol)
-        } else {
+      const { quote, yahooSymbol, usedFallback, error: quoteErr } = await quoteWithFallback(
+        ticker,
+        yahooStats,
+      )
+      if (!quote) {
+        errors.push({
+          type: 'quote',
+          ticker,
+          yahooSymbol,
+          error: quoteErr?.message || 'quote failed',
+        })
+        await sleep(200)
+        continue
+      }
+      let row = mapQuoteRow(ticker, quote, date)
+      if (!row) {
+        errors.push({ type: 'quote_empty', ticker, yahooSymbol })
+        console.error('[cron/fetch-prices] quote empty', ticker, yahooSymbol)
+      } else {
+        if (!usedFallback) {
           try {
             row = await applyCurrencyConversion(row, mapping, fxCache, yahooStats)
           } catch (fxErr) {
@@ -391,50 +450,70 @@ export default async function handler(req, res) {
             await sleep(200)
             continue
           }
-          const { error } = await supabase.from('inv_prices').upsert(row, {
-            onConflict: 'ticker,date',
-          })
-          if (error) {
-            errors.push({ type: 'upsert_prices', ticker, error: error.message })
-            console.error('[cron/fetch-prices] upsert prices', ticker, error.message)
-          } else {
-            pricesUpserted += 1
-          }
         }
-      } catch (err) {
-        yahooStats.failed += 1
-        errors.push({ type: 'quote', ticker, yahooSymbol, error: err.message })
-        console.error('[cron/fetch-prices] quote failed', ticker, yahooSymbol, err.message)
+        const { error } = await supabase.from('inv_prices').upsert(row, {
+          onConflict: 'ticker,date',
+        })
+        if (error) {
+          errors.push({ type: 'upsert_prices', ticker, error: error.message })
+          console.error('[cron/fetch-prices] upsert prices', ticker, error.message)
+        } else {
+          pricesUpserted += 1
+        }
       }
       await sleep(200)
     }
 
     if (fetchFundamentals) {
       for (const ticker of tickers) {
-        const yahooSymbol = resolveYahooSymbol(ticker)
-        try {
-          const stats = await yahooFinance.quoteSummary(yahooSymbol, {
-            modules: ['financialData', 'defaultKeyStatistics'],
-          })
-          yahooStats.ok += 1
-          if (!stats?.financialData && !stats?.defaultKeyStatistics) {
-            errors.push({ type: 'fundamentals_empty', ticker, yahooSymbol })
-            continue
+        const symbols = yahooSymbolsFor(ticker)
+        for (let i = 0; i < symbols.length; i++) {
+          const yahooSymbol = symbols[i]
+          const usedFallback = i > 0
+          try {
+            const stats = await yahooFinance.quoteSummary(yahooSymbol, {
+              modules: ['financialData', 'defaultKeyStatistics'],
+            })
+            yahooStats.ok += 1
+            if (!stats?.financialData && !stats?.defaultKeyStatistics) {
+              if (!usedFallback && symbols.length > 1) {
+                console.warn(
+                  `[cron/fetch-prices] ${ticker}: fundamentals empty on ${yahooSymbol}, trying fallback ${symbols[1]}`,
+                )
+                await sleep(200)
+                continue
+              }
+              errors.push({ type: 'fundamentals_empty', ticker, yahooSymbol })
+              break
+            }
+            if (usedFallback) {
+              console.warn(
+                `[cron/fetch-prices] ${ticker}: fundamentals from fallback ${yahooSymbol}`,
+              )
+            }
+            const row = mapFundamentalsRow(ticker, stats, date)
+            const { error } = await supabase.from('inv_fundamentals').upsert(row, {
+              onConflict: 'ticker,date',
+            })
+            if (error) {
+              errors.push({ type: 'upsert_fundamentals', ticker, error: error.message })
+              console.error('[cron/fetch-prices] upsert fundamentals', ticker, error.message)
+            } else {
+              fundamentalsUpserted += 1
+            }
+            break
+          } catch (err) {
+            yahooStats.failed += 1
+            console.error('[cron/fetch-prices] fundamentals failed', ticker, yahooSymbol, err.message)
+            if (!usedFallback && symbols.length > 1) {
+              console.warn(
+                `[cron/fetch-prices] ${ticker}: fundamentals ${yahooSymbol} failed, trying fallback ${symbols[1]}`,
+              )
+              await sleep(200)
+              continue
+            }
+            errors.push({ type: 'fundamentals', ticker, yahooSymbol, error: err.message })
           }
-          const row = mapFundamentalsRow(ticker, stats, date)
-          const { error } = await supabase.from('inv_fundamentals').upsert(row, {
-            onConflict: 'ticker,date',
-          })
-          if (error) {
-            errors.push({ type: 'upsert_fundamentals', ticker, error: error.message })
-            console.error('[cron/fetch-prices] upsert fundamentals', ticker, error.message)
-          } else {
-            fundamentalsUpserted += 1
-          }
-        } catch (err) {
-          yahooStats.failed += 1
-          errors.push({ type: 'fundamentals', ticker, yahooSymbol, error: err.message })
-          console.error('[cron/fetch-prices] fundamentals failed', ticker, yahooSymbol, err.message)
         }
         await sleep(200)
       }
