@@ -50,7 +50,29 @@ function absoluteUrl(req, path) {
   return `${proto}://${host}${path}`
 }
 
+/** Allow Vite localhost to call production /api/trigger-cron. */
+function applyCors(req, res) {
+  const origin = String(req.headers.origin || '')
+  let hostname = ''
+  try {
+    hostname = origin ? new URL(origin).hostname : ''
+  } catch {
+    hostname = ''
+  }
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  }
+}
+
 export default async function handler(req, res) {
+  applyCors(req, res)
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end()
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }

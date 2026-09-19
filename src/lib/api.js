@@ -398,6 +398,7 @@ export async function fetchLastRecommendationsUpdateAt() {
 
 /** Manuální spuštění cronu přes server proxy (JWT → CRON_SECRET).
  *  type: 'prices' | 'recommendations'
+ *  Na localhost Vite neservíruje Vercel funkce → volat produkční URL.
  */
 export async function triggerCronJob(type) {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
@@ -405,7 +406,13 @@ export async function triggerCronJob(type) {
   const token = sessionData?.session?.access_token
   if (!token) throw new Error('Nejste přihlášeni')
 
-  const res = await fetch('/api/trigger-cron', {
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : ''
+  const baseUrl =
+    hostname === 'localhost' || hostname === '127.0.0.1'
+      ? 'https://investor-one-iota.vercel.app'
+      : ''
+
+  const res = await fetch(`${baseUrl}/api/trigger-cron`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
