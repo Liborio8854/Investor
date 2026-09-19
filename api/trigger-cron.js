@@ -50,27 +50,19 @@ function absoluteUrl(req, path) {
   return `${proto}://${host}${path}`
 }
 
-/** Allow Vite localhost to call production /api/trigger-cron. */
-function applyCors(req, res) {
-  const origin = String(req.headers.origin || '')
-  let hostname = ''
-  try {
-    hostname = origin ? new URL(origin).hostname : ''
-  } catch {
-    hostname = ''
-  }
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
-  }
-}
-
 export default async function handler(req, res) {
-  applyCors(req, res)
+  // CORS pro lokální vývoj
+  const allowedOrigins = ['http://localhost:5173', 'http://localhost:3000']
+  const origin = req.headers.origin
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  }
 
+  // Preflight request
   if (req.method === 'OPTIONS') {
-    return res.status(204).end()
+    return res.status(200).end()
   }
 
   if (req.method !== 'POST') {
